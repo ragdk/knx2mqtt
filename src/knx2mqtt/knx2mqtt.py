@@ -2,6 +2,9 @@ import os, sys
 import asyncio
 import click
 import json
+import enum
+
+from .mqtt import MQTTClient
 
 from xknx import XKNX, dpt
 from xknx.telegram import Telegram, AddressFilter
@@ -27,17 +30,20 @@ class GroupAddressInfo:
         self.description = description
         self.dpt_main = dpt_main
         self.dpt_sub = dpt_main
-        if dpt_main == 1 and not dpt_sub:
-            self.transcoder = dpt.DPTBase.transcoder_by_dpt(dpt_main, 2)
-        else: 
-            self.transcoder = dpt.DPTBase.transcoder_by_dpt(dpt_main, dpt_sub) if dpt_main else None
-        if not self.transcoder:
-            print(f'No transcoder found for group address {address} (DPT {dpt_main}.{str(dpt_sub).zfill(4)}) - {name}, {description}', file=sys.stderr)
+        self.transcoder = dpt.DPTBase.transcoder_by_dpt(dpt_main, dpt_sub)
+        # if dpt_main == 1 and not dpt_sub:
+        #     self.transcoder = dpt.DPTBase.transcoder_by_dpt(dpt_main, 2)
+        # elif dpt_main:
+        #     self.transcoder = dpt.DPTBase.transcoder_by_dpt(dpt_main, dpt_sub)
+        # else: 
+        #     self.transcoder = None
+        # if not self.transcoder:
+        #     print(f'No transcoder found for group address {address} (DPT {dpt_main}.{str(dpt_sub).zfill(4)}) - {name}, {description}', file=sys.stderr)
 
 class KNXDaemon:
     """Small KNX listening daemon."""
 
-    def __init__(self, gateway: str, knx_project_path: str = None, rooms_to_monitor: list[str] = None, ):
+    def __init__(self, gateway: str, knx_project_path: str = None, rooms_to_monitor: list[str] = None, no_mqtt: bool = False):
         # get credentials from environment variables
         self.knxkeys_file_path = os.environ.get("KNX_KEYS_PATH")
         self.knxkeys_pw = os.environ.get("KNX_KEYS_PW")
@@ -46,15 +52,27 @@ class KNXDaemon:
         self.address_filters: list[AddressFilter] = None
         self.group_addresses: dict[str: GroupAddressInfo] = {}
 
+        # MQTT client
+        self.mqtt = not no_mqtt
+        if self.mqtt:
+            # TODO: add command line arguments or config file for these
+            broker = "localhost"  # Replace with your broker address
+            port = 1883  # Default MQTT port
+            main_topic = "knx"  # Replace with your publish topic
+            self.mqtt_client = MQTTClient(broker, port, main_topic)
+
         # extract knx project with info about devices, group addresses etc.
         if knx_project_path:
             self.knx_project: KNXProject = XKNXProj(path=knx_project_path, password=self.knxkeys_pw).parse()
 
-            # create address filters for rooms
+            # create address filters for rooms based on the assumption that the room name is part of the name of the device or group address
             if rooms_to_monitor:
+                filters: list[AddressFilter] = []
                 for room in rooms_to_monitor:
-                    self.address_filters.extend(list(map(AddressFilter, [k for (k,v) in self.knx_project['devices'].items() if room in v['name'] or room in v['description']])))
-                    self.address_filters.extend(list(map(AddressFilter, [k for (k,v) in self.knx_project['group_addresses'].items() if room in v['name'] or room in v['description']])))
+                    filters.extend(list(map(AddressFilter, [k for (k,v) in self.knx_project['devices'].items() if room in v['name'] or room in v['description']])))
+                    filters.extend(list(map(AddressFilter, [k for (k,v) in self.knx_project['group_addresses'].items() if room in v['name'] or room in v['description']])))
+                if filters:
+                    self.address_filters = filters
 
             # setup group addresses
             for addr, ga in self.knx_project['group_addresses'].items():
@@ -65,42 +83,61 @@ class KNXDaemon:
                     dpt_main=ga['dpt']['main'] if ga['dpt'] else None,
                     dpt_sub=ga['dpt']['sub'] if ga['dpt'] else None,
                 )
-
     
     def __telegram_received_cb(self, telegram: Telegram):
         if self.knx_project:
-            direction = telegram.direction.value
-            src = f"{str(telegram.source_address)}, Unknown device"
-            if str(telegram.source_address) in self.knx_project['devices'].keys():
-                src = f"{str(telegram.source_address)}, {self.knx_project['devices'][str(telegram.source_address)]['name']}"
-            else:
-                print(f"{src} - Telegram: {telegram}", file=sys.stderr)
-            dest = f"{str(telegram.destination_address)}, Unknown group address"
-            if str(telegram.destination_address) in self.knx_project['group_addresses'].keys():
-                dest = f"{str(telegram.destination_address)}, {self.knx_project['group_addresses'][str(telegram.destination_address)]['name']}"
-            else:
-                print(f"{dest} - Telegram: {telegram}", file=sys.stderr)
-            transcoder = self.group_addresses[str(telegram.destination_address)].transcoder
             payload = telegram.payload
-            no_payload = False
-            msg_type = "Unknown"
-            if payload.CODE == APCIService.GROUP_WRITE:
-                msg_type = "Group Write"
-            elif payload.CODE == APCIService.GROUP_READ:
-                msg_type = "Group Read"
-                no_payload = True
-            elif payload.CODE == APCIService.GROUP_RESPONSE:
-                msg_type = "Group Response"
-            else:
-                msg_type = f"Unhandled ({payload.CODE})"
-            if transcoder:
-                if no_payload: # read operations has no payload, but we still consider it handling the payload
-                    payload = ""
+            transcoder = self.group_addresses[str(telegram.destination_address)].transcoder
+
+            if self.mqtt:
+                if not transcoder:
+                    print(f"No transcoder for group address {ga.address} (DPT {ga.dpt_main}.{str(ga.dpt_sub).zfill(4)}) - {ga.name}, {ga.description}", file=sys.stderr)
+                elif payload.CODE in [APCIService.GROUP_WRITE, APCIService.GROUP_RESPONSE]:
+                    value = transcoder.from_knx(payload.value)
+                    value = value.name if isinstance(value, enum.EnumType) else value
+                    self.mqtt_client.publish(
+                        deviceid=str(telegram.source_address),
+                        type=transcoder.value_type,
+                        unit=transcoder.unit,
+                        value=transcoder.from_knx(payload.value),
+                        destination=str(telegram.destination_address)
+                    )
+                elif payload.CODE == APCIService.GROUP_READ:
+                    pass
                 else:
-                    payload = f" : [type: {transcoder.value_type}, value: {transcoder.from_knx(payload.value)}, unit: {transcoder.unit}]"
-            else:
-                print(f"No transcoder for payload: {payload} - Telegram: {telegram}", file=sys.stderr)
-            print(f"Msg {direction}, {msg_type}: {src} -> {dest}{payload}")
+                    print(f"Unhandled payload: {payload} - Telegram: {telegram}", file=sys.stderr)
+            # this is for debugging
+            else: 
+                direction = telegram.direction.value
+                src = f"{str(telegram.source_address)}, Unknown device"
+                if str(telegram.source_address) in self.knx_project['devices'].keys():
+                    src = f"{str(telegram.source_address)}, {self.knx_project['devices'][str(telegram.source_address)]['name']}"
+                else:
+                    print(f"{src} - Telegram: {telegram}", file=sys.stderr)
+                dest = f"{str(telegram.destination_address)}, Unknown group address"
+                if str(telegram.destination_address) in self.knx_project['group_addresses'].keys():
+                    dest = f"{str(telegram.destination_address)}, {self.knx_project['group_addresses'][str(telegram.destination_address)]['name']}"
+                else:
+                    print(f"{dest} - Telegram: {telegram}", file=sys.stderr)
+                no_payload = False
+                msg_type = "Unknown"
+                if payload.CODE == APCIService.GROUP_WRITE:
+                    msg_type = "Group Write"
+                elif payload.CODE == APCIService.GROUP_READ:
+                    msg_type = "Group Read"
+                    no_payload = True
+                elif payload.CODE == APCIService.GROUP_RESPONSE:
+                    msg_type = "Group Response"
+                else:
+                    msg_type = f"Unhandled ({payload.CODE})"
+                if transcoder:
+                    if no_payload: # read operations has no payload, but we still consider it handling the payload
+                        payload = ""
+                    else:
+                        payload = f" : [type: {transcoder.value_type}, value: {transcoder.from_knx(payload.value)}, unit: {transcoder.unit}]"
+                else:
+                    print(f"No transcoder for payload: {payload} - Telegram: {telegram}", file=sys.stderr)
+                print(f"Msg {direction}, {msg_type}: {src} -> {dest}{payload}")
         else:
             print("Telegram received: {0}".format(telegram))
 
@@ -138,6 +175,8 @@ class KNXDaemon:
         await self.xknx_daemon.stop()
 
     def run(self):
+        if self.mqtt:
+            self.mqtt_client.connect_and_run()
         self.__setup_daemon()
         asyncio.run(self.__run_async())
     

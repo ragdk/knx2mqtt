@@ -4,9 +4,9 @@ Small python package to get to learn working with KNX from "outside" using the s
 TODO
 - [x] Listen to the KNX bus via KNX TCP/IP Secure router
 - [x] Get the right datatypes
+- [x] Publish data to MQTT broker
 - [ ] Write to the KNX bus to make a change in a device, e.g. turn on/off the light
-- [ ] Publish data to MQTT broker
-- [ ] Read and write to/from KNX via the MQTT broker
+- [ ] Get command from MQTT broker and pass it on to KNX device
 
 # Usage
 Developing with uv (https://astral.sh/blog/uv)
