@@ -3,10 +3,12 @@ import asyncio
 import click
 import json
 import enum
+import logging
 
 from .mqtt import MQTTClient
 
 from xknx import XKNX, dpt
+from xknx.exceptions import CouldNotParseTelegram
 from xknx.telegram import Telegram, AddressFilter
 from xknx.telegram.apci import GroupValueWrite, GroupValueResponse, APCIService
 from xknx.devices import Device
@@ -14,6 +16,9 @@ from xknx.core import XknxConnectionState
 from xknx.io import ConnectionConfig, ConnectionType, SecureConfig
 from xknxproject.models import KNXProject
 from xknxproject import XKNXProj
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 class GroupAddressInfo:
     """Group address info for runtime usage."""
@@ -31,14 +36,6 @@ class GroupAddressInfo:
         self.dpt_main = dpt_main
         self.dpt_sub = dpt_main
         self.transcoder = dpt.DPTBase.transcoder_by_dpt(dpt_main, dpt_sub)
-        # if dpt_main == 1 and not dpt_sub:
-        #     self.transcoder = dpt.DPTBase.transcoder_by_dpt(dpt_main, 2)
-        # elif dpt_main:
-        #     self.transcoder = dpt.DPTBase.transcoder_by_dpt(dpt_main, dpt_sub)
-        # else: 
-        #     self.transcoder = None
-        # if not self.transcoder:
-        #     print(f'No transcoder found for group address {address} (DPT {dpt_main}.{str(dpt_sub).zfill(4)}) - {name}, {description}', file=sys.stderr)
 
 class KNXDaemon:
     """Small KNX listening daemon."""
@@ -87,38 +84,39 @@ class KNXDaemon:
     def __telegram_received_cb(self, telegram: Telegram):
         if self.knx_project:
             payload = telegram.payload
-            transcoder = self.group_addresses[str(telegram.destination_address)].transcoder
+            ga = self.group_addresses[str(telegram.destination_address)]
+            transcoder = ga.transcoder
 
             if self.mqtt:
                 if not transcoder:
-                    print(f"No transcoder for group address {ga.address} (DPT {ga.dpt_main}.{str(ga.dpt_sub).zfill(4)}) - {ga.name}, {ga.description}", file=sys.stderr)
+                    logger.error(f"No transcoder for group address {ga.address} (DPT {ga.dpt_main}.{str(ga.dpt_sub).zfill(4)}) - {ga.name}, {ga.description}")
                 elif payload.CODE in [APCIService.GROUP_WRITE, APCIService.GROUP_RESPONSE]:
-                    value = transcoder.from_knx(payload.value)
-                    value = value.name if isinstance(value, enum.EnumType) else value
-                    self.mqtt_client.publish(
-                        deviceid=str(telegram.source_address),
-                        type=transcoder.value_type,
-                        unit=transcoder.unit,
-                        value=transcoder.from_knx(payload.value),
-                        destination=str(telegram.destination_address)
-                    )
+                    try:
+                        value = transcoder.from_knx(payload.value)
+                        value = value.member.name if isinstance(value, enum.EnumType) else value
+                        self.mqtt_client.publish(
+                            deviceid=str(telegram.source_address),
+                            type=transcoder.value_type,
+                            unit=transcoder.unit,
+                            value=transcoder.from_knx(payload.value),
+                            destination=str(telegram.destination_address)
+                        )
+                    except CouldNotParseTelegram as e:
+                        logger.error(f"Could not parse payload {payload.value} for group address {ga.address} (DPT {ga.dpt_main}.{str(ga.dpt_sub).zfill(4)}) - {ga.name}, {ga.description}: {e}")
+
                 elif payload.CODE == APCIService.GROUP_READ:
                     pass
                 else:
-                    print(f"Unhandled payload: {payload} - Telegram: {telegram}", file=sys.stderr)
-            # this is for debugging
+                    logger.error(f"Unhandled payload: {payload} - Telegram: {telegram}")
+            # this is for debugging purposes
             else: 
                 direction = telegram.direction.value
                 src = f"{str(telegram.source_address)}, Unknown device"
                 if str(telegram.source_address) in self.knx_project['devices'].keys():
                     src = f"{str(telegram.source_address)}, {self.knx_project['devices'][str(telegram.source_address)]['name']}"
-                else:
-                    print(f"{src} - Telegram: {telegram}", file=sys.stderr)
                 dest = f"{str(telegram.destination_address)}, Unknown group address"
                 if str(telegram.destination_address) in self.knx_project['group_addresses'].keys():
                     dest = f"{str(telegram.destination_address)}, {self.knx_project['group_addresses'][str(telegram.destination_address)]['name']}"
-                else:
-                    print(f"{dest} - Telegram: {telegram}", file=sys.stderr)
                 no_payload = False
                 msg_type = "Unknown"
                 if payload.CODE == APCIService.GROUP_WRITE:
@@ -136,22 +134,24 @@ class KNXDaemon:
                     else:
                         payload = f" : [type: {transcoder.value_type}, value: {transcoder.from_knx(payload.value)}, unit: {transcoder.unit}]"
                 else:
-                    print(f"No transcoder for payload: {payload} - Telegram: {telegram}", file=sys.stderr)
-                print(f"Msg {direction}, {msg_type}: {src} -> {dest}{payload}")
+                    logger.error(f"No transcoder for payload: {payload} - Telegram: {telegram}")
+                logger.info(f"Msg {direction}, {msg_type}: {src} -> {dest}{payload}")
         else:
-            print("Telegram received: {0}".format(telegram))
+            logger.info("Telegram received: {0}".format(telegram))
 
     def __device_updated_cb(self, device: Device):
-        print("Callback received from {0}".format(device.name))
+        logger.info("Callback received from {0}".format(device.name))
 
     def __connection_state_changed_cb(self, state: XknxConnectionState):
-        print("Callback received with state {0}".format(state.name))
+        logger.info("Callback received with state {0}".format(state.name))
 
     def __setup_daemon(self):
         if not self.gateway:
-            exit("ERROR: Please provide KNX/IP gateway IP.")
+            logger.error("ERROR: Please provide KNX/IP gateway IP.")
+            exit(1)
         if self.knxkeys_file_path is None or self.knxkeys_pw is None:
-            exit("ERROR: Please provide KNX keys and password environment variables (KNX_KEYS_PATH and KNX_KEYS_PW)")
+            logger.error("ERROR: Please provide KNX keys and password environment variables (KNX_KEYS_PATH and KNX_KEYS_PW)")
+            exit(1)
 
         secure_config = SecureConfig(
             knxkeys_file_path=self.knxkeys_file_path, 
@@ -180,6 +180,12 @@ class KNXDaemon:
         self.__setup_daemon()
         asyncio.run(self.__run_async())
     
+    def stop(self):
+        if self.mqtt:
+            self.mqtt_client.disconnect()
+        if self.xknx_daemon:
+            self.xknx_daemon.stop()
+
     def project_as_json(self) -> dict:
         return json.dumps(self.knx_project, indent=4)
 
@@ -189,9 +195,13 @@ class KNXDaemon:
 @click.option('--monitor-room', help='The nunmber of a room to monitor.', multiple=True, required=False)
 @click.option('--print-project-json', help='Print project JSON to stdout and skip running the listener.', is_flag=True)
 def knx2mqtt(gateway, knx_project, monitor_room, print_project_json):
-    """Small KNX tool to parse a KNX project file and run a simple KNX listening deamon."""
+    logging.basicConfig(format="{asctime}: {levelname:<7}: {name:<17}: {message}", style="{", datefmt="%Y-%m-%d %H:%M", force=True)
+    logging.getLogger().setLevel(logging.INFO)
+
+    """Small KNX tool to parse a KNX project file and run a simple KNX listening daemon."""
     if not knx_project and (print_project_json or monitor_room):
-        exit("ERROR: No KNX project file given!")
+        logger.error("ERROR: No KNX project file given!")
+        exit(1)
 
     knx_daemon: KNXDaemon = KNXDaemon(gateway=gateway, knx_project_path=knx_project, rooms_to_monitor=monitor_room)
 

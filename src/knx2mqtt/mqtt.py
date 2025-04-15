@@ -4,6 +4,9 @@ import datetime
 import json
 import paho.mqtt.client as mqtt
 
+# Configure logging
+logger = logging.getLogger(__name__)
+
 class MQTTClient:
     def __init__(self, broker, port, main_topic):
         self.broker = broker
@@ -24,26 +27,26 @@ class MQTTClient:
         self.client.enable_logger()
 
     def __on_message(self, client, userdata, msg):
-        print(f"Received message on topic {msg.topic}: {msg.payload.decode()}")
+        logger.debug(f"Received message on topic {msg.topic}: {msg.payload.decode()}")
 
     def __on_publish(self, client, userdata, mid, reason_code, properties):
         if reason_code.is_failure:
-            print(f"Failed to publish message: {reason_code}.")
+            logger.error(f"Failed to publish message: {reason_code}.")
         else:
-            print(f"Message published successfully: {mid}.")
+            logger.debug(f"Message published successfully: {mid}.")
 
     def __on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code.is_failure:
-            print(f"Failed to connect: {reason_code}.")
+            logger.error(f"Failed to connect to broker '{self.broker}:{self.port}': {reason_code}.")
             self.disconnect()
         else:
             self.is_running = True
             # Subscribe to the specified topic
             self.client.subscribe(self.sub_topic)
-            print(f"Listening to topic '{self.sub_topic}' on broker '{self.broker}:{self.port}'")
+            logger.info(f"Listening to topic '{self.sub_topic}' on broker '{self.broker}:{self.port}'")
 
     def __on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
-        print(f"Disconnected from broker: {reason_code}.")
+        logger.info(f"Disconnected from broker: {reason_code}.")
         self.is_running = False
 
     def publish(self, deviceid, type, unit, value, destination):
@@ -72,19 +75,23 @@ class MQTTClient:
         try:
             self.client.connect(self.broker, self.port)
         except ConnectionError as e:
-            exit(f"ERROR: Failed to connect to MQTT broker: {e}")
+            logger.error(f"ERROR: Failed to connect to MQTT broker: {e}")
+            exit(1)
 
         # Start the loop to process messages
         self.client.loop_start()
         self.is_running = True
 
     def disconnect(self):
-        print("Disconnecting from broker...")
+        logger.info("Disconnecting from broker...")
         self.client.loop_stop()
         self.client.disconnect()
 
 # Example usage
 if __name__ == "__main__":
+    logging.basicConfig(format="{asctime}: {levelname:<7}: {name:<17}: {message}", style="{", datefmt="%Y-%m-%d %H:%M", force=True)
+    logging.getLogger().setLevel(logging.INFO)
+
     broker = "localhost"  # Replace with your broker address
     port = 1883  # Default MQTT port
     main_topic = "knx"  # Replace with your publish topic
