@@ -7,6 +7,8 @@ TODO
 - [x] Publish data to MQTT broker
 - [ ] Write to the KNX bus to make a change in a device, e.g. turn on/off the light
 - [ ] Get command from MQTT broker and pass it on to KNX device
+- [ ] Get config and options into a file
+- [ ] Run the daemon in a docker container
 
 # Usage
 Developing with uv (https://astral.sh/blog/uv)
