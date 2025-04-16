@@ -8,14 +8,14 @@ import paho.mqtt.client as mqtt
 logger = logging.getLogger(__name__)
 
 class MQTTClient:
-    def __init__(self, broker, port, main_topic):
+    def __init__(self, broker: str, port: int, mqtt_client_id: str, main_topic: str):
         self.broker = broker
         self.port = port
         self.pub_topic = f"{main_topic}/data"
         self.sub_topic = f"{main_topic}/cmd"
-        # self.sub_topic = "#"
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5, client_id="knx2mqtt")
         self.is_running = False
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5, client_id=mqtt_client_id)
+        self.client.enable_logger()
 
         # Set callbacks
         self.client.on_message = self.__on_message
@@ -23,8 +23,12 @@ class MQTTClient:
         self.client.on_disconnect = self.__on_disconnect
         self.client.on_publish = self.__on_publish
 
-        # logging.basicConfig(level=logging.DEBUG)
-        self.client.enable_logger()
+        try:
+            self.client.connect(self.broker, self.port)
+        except ConnectionError as e:
+            logger.error(f"Failed to connect to MQTT broker {self.broker}:{self.port}: {e}")
+            exit(1)
+
 
     def __on_message(self, client, userdata, msg):
         logger.debug(f"Received message on topic {msg.topic}: {msg.payload.decode()}")
@@ -33,7 +37,7 @@ class MQTTClient:
         if reason_code.is_failure:
             logger.error(f"Failed to publish message: {reason_code}.")
         else:
-            logger.debug(f"Message published successfully: {mid}.")
+            logger.debug(f"Message published successfully, ID: {mid}.")
 
     def __on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code.is_failure:
@@ -70,14 +74,7 @@ class MQTTClient:
         }
         self.client.publish(topic, json.dumps(msg, ensure_ascii=False))
 
-    def connect_and_run(self):
-        # Connect to the MQTT broker
-        try:
-            self.client.connect(self.broker, self.port)
-        except ConnectionError as e:
-            logger.error(f"ERROR: Failed to connect to MQTT broker: {e}")
-            exit(1)
-
+    def run(self):
         # Start the loop to process messages
         self.client.loop_start()
         self.is_running = True
@@ -97,7 +94,7 @@ if __name__ == "__main__":
     main_topic = "knx"  # Replace with your publish topic
 
     mqtt_client = MQTTClient(broker, port, main_topic)
-    mqtt_client.connect_and_run()
+    mqtt_client.run()
 
     try:
         # Keep the script running

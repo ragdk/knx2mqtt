@@ -5,6 +5,8 @@ import json
 import enum
 import logging
 
+from configparser import ConfigParser, NoOptionError
+
 from .mqtt import MQTTClient
 
 from xknx import XKNX, dpt
@@ -38,32 +40,51 @@ class GroupAddressInfo:
         self.transcoder = dpt.DPTBase.transcoder_by_dpt(dpt_main, dpt_sub)
 
 class KNXDaemon:
-    """Small KNX listening daemon."""
+    """KNX daemon.
+    Listens to the KNX bus and publishes messages to an MQTT broker."""
 
-    def __init__(self, gateway: str, knx_project_path: str = None, rooms_to_monitor: list[str] = None, no_mqtt: bool = False):
-        # get credentials from environment variables
-        self.knxkeys_file_path = os.environ.get("KNX_KEYS_PATH")
-        self.knxkeys_pw = os.environ.get("KNX_KEYS_PW")
-        self.gateway = gateway
-        self.knx_project = None
+    def __init__(self, 
+                 knx_gateway: str, 
+                 knx_project_path: str | os.PathLike, 
+                 knx_keys_path: str | os.PathLike,
+                 knxkeys_pw: str,
+                 mqtt_broker: str = None,
+                 mqtt_port: int = None,
+                 mqtt_client_id: str = None,
+                 mqtt_main_topic: str = "knx",
+                 rooms_to_monitor: list[str] = None, 
+                 ):
+        # Input checks
+        do_exit = False
+        if not os.path.exists(knx_project_path):
+            logger.error(f"KNX project file {knx_project_path} does not exist.")
+            do_exit = True
+        if not os.path.exists(knx_keys_path):
+            logger.error(f"KNX keys file {knx_keys_path} does not exist.")
+            do_exit = True
+        if do_exit:
+            exit(1)
+
+        # MQTT client - do this first as it is quickest
+        self.__setup_mqtt(mqtt_broker, mqtt_port, mqtt_client_id, mqtt_main_topic)
+        # KNX
+        self.__setup_knx(knx_gateway, knx_project_path, knx_keys_path, knxkeys_pw, rooms_to_monitor)
+
+    def __setup_knx(self, knx_gateway, knx_project_path, knx_keys_path, knxkeys_pw, rooms_to_monitor):
+        self.knx_keys_path = knx_keys_path
+        self.knx_keys_pw = knxkeys_pw
+        self.knx_gateway = knx_gateway
         self.address_filters: list[AddressFilter] = None
         self.group_addresses: dict[str: GroupAddressInfo] = {}
 
-        # MQTT client
-        self.mqtt = not no_mqtt
-        if self.mqtt:
-            # TODO: add command line arguments or config file for these
-            broker = "localhost"  # Replace with your broker address
-            port = 1883  # Default MQTT port
-            main_topic = "knx"  # Replace with your publish topic
-            self.mqtt_client = MQTTClient(broker, port, main_topic)
-
         # extract knx project with info about devices, group addresses etc.
+        self.knx_project = None
         if knx_project_path:
-            self.knx_project: KNXProject = XKNXProj(path=knx_project_path, password=self.knxkeys_pw).parse()
+            self.knx_project: KNXProject = XKNXProj(path=knx_project_path, password=self.knx_keys_pw).parse()
 
             # create address filters for rooms based on the assumption that the room name is part of the name of the device or group address
             if rooms_to_monitor:
+                logger.debug(f"Rooms to monitor: {rooms_to_monitor}")
                 filters: list[AddressFilter] = []
                 for room in rooms_to_monitor:
                     filters.extend(list(map(AddressFilter, [k for (k,v) in self.knx_project['devices'].items() if room in v['name'] or room in v['description']])))
@@ -80,7 +101,31 @@ class KNXDaemon:
                     dpt_main=ga['dpt']['main'] if ga['dpt'] else None,
                     dpt_sub=ga['dpt']['sub'] if ga['dpt'] else None,
                 )
-    
+        self.__setup_knx_daemon()
+
+    def __setup_knx_daemon(self):
+        secure_config = SecureConfig(
+            knxkeys_file_path=self.knx_keys_path, 
+            knxkeys_password=self.knx_keys_pw)
+        
+        connection_config = ConnectionConfig(
+            connection_type=ConnectionType.TUNNELING_TCP_SECURE, 
+            gateway_ip=self.knx_gateway, 
+            secure_config=secure_config)
+        
+        self.xknx_daemon = XKNX(
+            device_updated_cb=self.__device_updated_cb,
+            connection_state_changed_cb=self.__connection_state_changed_cb, 
+            daemon_mode=True,
+            connection_config=connection_config,
+        )
+        self.xknx_daemon.telegram_queue.register_telegram_received_cb(self.__telegram_received_cb, self.address_filters)            
+
+    def __setup_mqtt(self, mqtt_broker: str, mqtt_port: int, mqtt_client_id: str, mqtt_main_topic: str):
+        self.mqtt = not mqtt_broker is None
+        if self.mqtt:
+            self.mqtt_client = MQTTClient(mqtt_broker, mqtt_port, mqtt_client_id, mqtt_main_topic)
+
     def __telegram_received_cb(self, telegram: Telegram):
         if self.knx_project:
             payload = telegram.payload
@@ -145,39 +190,13 @@ class KNXDaemon:
     def __connection_state_changed_cb(self, state: XknxConnectionState):
         logger.info("Callback received with state {0}".format(state.name))
 
-    def __setup_daemon(self):
-        if not self.gateway:
-            logger.error("ERROR: Please provide KNX/IP gateway IP.")
-            exit(1)
-        if self.knxkeys_file_path is None or self.knxkeys_pw is None:
-            logger.error("ERROR: Please provide KNX keys and password environment variables (KNX_KEYS_PATH and KNX_KEYS_PW)")
-            exit(1)
-
-        secure_config = SecureConfig(
-            knxkeys_file_path=self.knxkeys_file_path, 
-            knxkeys_password=self.knxkeys_pw)
-        
-        connection_config = ConnectionConfig(
-            connection_type=ConnectionType.TUNNELING_TCP_SECURE, 
-            gateway_ip=self.gateway, 
-            secure_config=secure_config)
-        
-        self.xknx_daemon = XKNX(
-            device_updated_cb=self.__device_updated_cb,
-            connection_state_changed_cb=self.__connection_state_changed_cb, 
-            daemon_mode=True,
-            connection_config=connection_config,
-        )
-        self.xknx_daemon.telegram_queue.register_telegram_received_cb(self.__telegram_received_cb, self.address_filters)            
-
     async def __run_async(self):
         await self.xknx_daemon.start()
         await self.xknx_daemon.stop()
 
     def run(self):
         if self.mqtt:
-            self.mqtt_client.connect_and_run()
-        self.__setup_daemon()
+            self.mqtt_client.run()
         asyncio.run(self.__run_async())
     
     def stop(self):
@@ -187,19 +206,36 @@ class KNXDaemon:
             self.xknx_daemon.stop()
 
 @click.command()
-@click.option('--gateway', help='The IP of the KNX/IP gateway', required=False)
-@click.option('--knx-project', help='The KNX project file.', type=click.Path(), required=False)
-@click.option('--monitor-room', help='The nunmber of a room to monitor.', multiple=True, required=False)
-def knx2mqtt(gateway, knx_project, monitor_room):
+@click.option('--config', help='Path to the configuration file.', type=click.Path(exists=True), required=True)
+def knx2mqtt(config):
     logging.basicConfig(format="{asctime}: {levelname:<7}: {name:<17}: {message}", style="{", datefmt="%Y-%m-%d %H:%M", force=True)
-    logging.getLogger().setLevel(logging.INFO)
 
-    """Small KNX tool to parse a KNX project file and run a simple KNX listening daemon."""
-    if not knx_project and monitor_room:
-        logger.error("ERROR: No KNX project file given! - needed to filter on room names.")
+    # Load configuration file
+    config_parser = ConfigParser()
+    config_parser.read(config)
+    logging.getLogger().setLevel(config_parser.get("logging", "level").upper())
+
+    # Get password from environment variable
+    knx_keys_pw = os.environ.get("KNX_KEYS_PW")
+    if not knx_keys_pw:
+        logger.error("Please provide KNX keys password via the KNX_KEYS_PW environment variable.")
         exit(1)
 
-    knx_daemon: KNXDaemon = KNXDaemon(gateway=gateway, knx_project_path=knx_project, rooms_to_monitor=monitor_room)
+    try:
+        knx_daemon: KNXDaemon = KNXDaemon(
+            knx_gateway = config_parser.get("knx", "Gateway"),
+            knx_project_path = config_parser.get("knx", "ProjectPath"),
+            knx_keys_path = config_parser.get("knx", "KeysPath"),
+            knxkeys_pw=knx_keys_pw,
+            mqtt_broker=config_parser.get("mqtt", "Broker"),
+            mqtt_port=config_parser.getint("mqtt", "Port"),
+            mqtt_client_id=config_parser.get("mqtt", "ClientID"),
+            mqtt_main_topic=config_parser.get("mqtt", "MainTopic"),
+            rooms_to_monitor=[s.strip() for s in config_parser.get("knx", "MonitorRooms").split(",")]
+            )
+    except NoOptionError as e:
+        logger.error(f"Missing configuration option in config file: {e}")
+        exit(1)
     knx_daemon.run()
 
 @click.command()
