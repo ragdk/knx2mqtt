@@ -180,7 +180,7 @@ class KNXDaemon:
                         payload = f" : [type: {transcoder.value_type}, value: {transcoder.from_knx(payload.value)}, unit: {transcoder.unit}]"
                 else:
                     logger.error(f"No transcoder for payload: {payload} - Telegram: {telegram}")
-                logger.info(f"Msg {direction}, {msg_type}: {src} -> {dest}{payload}")
+                print(f"Msg {direction}, {msg_type}: {src} -> {dest}{payload}")
         else:
             logger.info("Telegram received: {0}".format(telegram))
 
@@ -208,6 +208,15 @@ class KNXDaemon:
 @click.command()
 @click.option('--config', help='Path to the configuration file.', type=click.Path(exists=True), required=True)
 def knx2mqtt(config):
+    """A light KNX to MQTT daemon.
+    
+    All configuration is done via the config file, except for the KNX keys file password, 
+    which is passed via the environment variable KNX_KEYS_PW. See exmaple config file
+    in the project directory.
+    
+    If the mqtt broker options are not specified, the KNX daemon will run in a mode that only 
+    listens to the KNX bus and prints the telegrams to the console."""
+
     logging.basicConfig(format="{asctime}: {levelname:<7}: {name:<17}: {message}", style="{", datefmt="%Y-%m-%d %H:%M", force=True)
 
     # Load configuration file
@@ -241,6 +250,10 @@ def knx2mqtt(config):
 @click.command()
 @click.option('--knx-project', help='The KNX project file.', type=click.Path())
 def print_knx_project_json(knx_project):
+    """Small utility to print the KNX project file as JSON.
+    
+    KNX password is passed via the environment variable KNX_KEYS_PW."""
+
     knxkeys_pw = os.environ.get("KNX_KEYS_PW")
 
     knx_project: KNXProject = XKNXProj(path=knx_project, password=knxkeys_pw).parse()

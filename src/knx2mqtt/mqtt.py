@@ -89,11 +89,7 @@ if __name__ == "__main__":
     logging.basicConfig(format="{asctime}: {levelname:<7}: {name:<17}: {message}", style="{", datefmt="%Y-%m-%d %H:%M", force=True)
     logging.getLogger().setLevel(logging.INFO)
 
-    broker = "localhost"  # Replace with your broker address
-    port = 1883  # Default MQTT port
-    main_topic = "knx"  # Replace with your publish topic
-
-    mqtt_client = MQTTClient(broker, port, main_topic)
+    mqtt_client = MQTTClient("localhost", 1883, "test_client", "knx")
     mqtt_client.run()
 
     try:
