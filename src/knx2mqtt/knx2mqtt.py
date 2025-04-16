@@ -186,30 +186,30 @@ class KNXDaemon:
         if self.xknx_daemon:
             self.xknx_daemon.stop()
 
-    def project_as_json(self) -> dict:
-        return json.dumps(self.knx_project, indent=4)
-
 @click.command()
 @click.option('--gateway', help='The IP of the KNX/IP gateway', required=False)
 @click.option('--knx-project', help='The KNX project file.', type=click.Path(), required=False)
 @click.option('--monitor-room', help='The nunmber of a room to monitor.', multiple=True, required=False)
-@click.option('--print-project-json', help='Print project JSON to stdout and skip running the listener.', is_flag=True)
-def knx2mqtt(gateway, knx_project, monitor_room, print_project_json):
+def knx2mqtt(gateway, knx_project, monitor_room):
     logging.basicConfig(format="{asctime}: {levelname:<7}: {name:<17}: {message}", style="{", datefmt="%Y-%m-%d %H:%M", force=True)
     logging.getLogger().setLevel(logging.INFO)
 
     """Small KNX tool to parse a KNX project file and run a simple KNX listening daemon."""
-    if not knx_project and (print_project_json or monitor_room):
-        logger.error("ERROR: No KNX project file given!")
+    if not knx_project and monitor_room:
+        logger.error("ERROR: No KNX project file given! - needed to filter on room names.")
         exit(1)
 
     knx_daemon: KNXDaemon = KNXDaemon(gateway=gateway, knx_project_path=knx_project, rooms_to_monitor=monitor_room)
-
-    if print_project_json:
-        print(knx_daemon.project_as_json())
-        exit(0)
-
     knx_daemon.run()
+
+@click.command()
+@click.option('--knx-project', help='The KNX project file.', type=click.Path())
+def print_knx_project_json(knx_project):
+    knxkeys_pw = os.environ.get("KNX_KEYS_PW")
+
+    knx_project: KNXProject = XKNXProj(path=knx_project, password=knxkeys_pw).parse()
+    print(json.dumps(knx_project, indent=4))
+    exit(0)
 
 if __name__ == "__main__":
     knx2mqtt()

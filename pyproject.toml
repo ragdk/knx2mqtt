@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 knx2mqtt = "knx2mqtt:main"
+knxproj2json = "knx2mqtt:print_knx_json"
 
 [build-system]
 requires = ["hatchling"]
