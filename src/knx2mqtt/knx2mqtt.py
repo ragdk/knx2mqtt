@@ -10,7 +10,7 @@ from configparser import ConfigParser, NoOptionError
 from .mqtt import MQTTClient
 
 from xknx import XKNX, dpt
-from xknx.exceptions import CouldNotParseTelegram
+from xknx.exceptions import CouldNotParseTelegram, CommunicationError
 from xknx.telegram import Telegram, AddressFilter
 from xknx.telegram.apci import GroupValueWrite, GroupValueResponse, APCIService
 from xknx.devices import Device
@@ -132,57 +132,53 @@ class KNXDaemon:
             ga = self.group_addresses[str(telegram.destination_address)]
             transcoder = ga.transcoder
 
-            if self.mqtt:
-                if not transcoder:
-                    logger.error(f"No transcoder for group address {ga.address} (DPT {ga.dpt_main}.{str(ga.dpt_sub).zfill(4)}) - {ga.name}, {ga.description}")
-                elif payload.CODE in [APCIService.GROUP_WRITE, APCIService.GROUP_RESPONSE]:
+            if transcoder:
+                value = None
+                if payload.CODE in [APCIService.GROUP_WRITE, APCIService.GROUP_RESPONSE]:
                     try:
                         value = transcoder.from_knx(payload.value)
                         value = value.member.name if isinstance(value, enum.EnumType) else value
-                        self.mqtt_client.publish(
-                            deviceid=str(telegram.source_address),
-                            type=transcoder.value_type,
-                            unit=transcoder.unit,
-                            value=transcoder.from_knx(payload.value),
-                            destination=str(telegram.destination_address)
-                        )
                     except CouldNotParseTelegram as e:
                         logger.error(f"Could not parse payload {payload.value} for group address {ga.address} (DPT {ga.dpt_main}.{str(ga.dpt_sub).zfill(4)}) - {ga.name}, {ga.description}: {e}")
-
                 elif payload.CODE == APCIService.GROUP_READ:
                     pass
                 else:
-                    logger.error(f"Unhandled payload: {payload} - Telegram: {telegram}")
-            # this is for debugging purposes
-            else: 
-                direction = telegram.direction.value
-                src = f"{str(telegram.source_address)}, Unknown device"
-                if str(telegram.source_address) in self.knx_project['devices'].keys():
-                    src = f"{str(telegram.source_address)}, {self.knx_project['devices'][str(telegram.source_address)]['name']}"
-                dest = f"{str(telegram.destination_address)}, Unknown group address"
-                if str(telegram.destination_address) in self.knx_project['group_addresses'].keys():
-                    dest = f"{str(telegram.destination_address)}, {self.knx_project['group_addresses'][str(telegram.destination_address)]['name']}"
-                no_payload = False
-                msg_type = "Unknown"
-                if payload.CODE == APCIService.GROUP_WRITE:
-                    msg_type = "Group Write"
-                elif payload.CODE == APCIService.GROUP_READ:
-                    msg_type = "Group Read"
-                    no_payload = True
-                elif payload.CODE == APCIService.GROUP_RESPONSE:
-                    msg_type = "Group Response"
-                else:
-                    msg_type = f"Unhandled ({payload.CODE})"
-                if transcoder:
-                    if no_payload: # read operations has no payload, but we still consider it handling the payload
-                        payload = ""
-                    else:
-                        payload = f" : [type: {transcoder.value_type}, value: {transcoder.from_knx(payload.value)}, unit: {transcoder.unit}]"
-                else:
-                    logger.error(f"No transcoder for payload: {payload} - Telegram: {telegram}")
-                print(f"Msg {direction}, {msg_type}: {src} -> {dest}{payload}")
+                    logger.info(f"Unhandled payload: {payload} - Telegram: {telegram}")
+            
+                self.publish_message(
+                    deviceid=str(telegram.source_address),
+                    type=transcoder.value_type,
+                    unit=transcoder.unit,
+                    value=value,
+                    destination=str(telegram.destination_address),
+                    direction=telegram.direction.value,
+                    device_name=self.knx_project['devices'].get(str(telegram.source_address), {}).get('name', 'Unknown'),
+                    destination_name=ga.name,
+                    knx_msg_type=payload.CODE,
+                )
+            else:
+                logger.error(f"No transcoder for group address {ga.address} (DPT {ga.dpt_main}.{str(ga.dpt_sub).zfill(4)}) - {ga.name}, {ga.description}")
+        logger.debug("Telegram received: {0}".format(telegram))
+
+    def publish_message(self, deviceid, type, unit, value, destination, 
+                        direction=None, device_name=None, destination_name=None, knx_msg_type=None):
+        """Publish a message to the MQTT broker or write to the console if not running with MQTT."""
+        if self.mqtt:
+            # only publish write and response messages
+            if knx_msg_type in [APCIService.GROUP_WRITE, APCIService.GROUP_RESPONSE]:
+                self.mqtt_client.publish(
+                    deviceid=deviceid,
+                    type=type,
+                    unit=unit,
+                    value=value,
+                    destination=destination,
+                )
         else:
-            logger.info("Telegram received: {0}".format(telegram))
+            # print to console
+            print(f"Received message ({knx_msg_type}, {direction}):"
+                  f"\n  device: {deviceid} (name: {device_name})"
+                  f"\n  type: {type}, unit: {unit}, value: {value}," 
+                  f"\n  destination: {destination} (name: {destination_name})")
 
     def __device_updated_cb(self, device: Device):
         logger.info("Callback received from {0}".format(device.name))
@@ -191,7 +187,11 @@ class KNXDaemon:
         logger.info("Callback received with state {0}".format(state.name))
 
     async def __run_async(self):
-        await self.xknx_daemon.start()
+        try:
+            await self.xknx_daemon.start()
+        except CommunicationError as e:
+            logger.error(f"Could not connect to KNX gateway {self.knx_gateway}: {e}")
+            exit(1)
         await self.xknx_daemon.stop()
 
     def run(self):
@@ -222,7 +222,7 @@ def knx2mqtt(config):
     # Load configuration file
     config_parser = ConfigParser()
     config_parser.read(config)
-    logging.getLogger().setLevel(config_parser.get("logging", "level").upper())
+    logging.getLogger(knx2mqtt.name).setLevel(config_parser.get("logging", "level").upper())
 
     # Get password from environment variable
     knx_keys_pw = os.environ.get("KNX_KEYS_PW")
@@ -230,13 +230,16 @@ def knx2mqtt(config):
         logger.error("Please provide KNX keys password via the KNX_KEYS_PW environment variable.")
         exit(1)
 
+    # disable MQTT via env var?
+    skip_mqtt = os.environ.get("KNX2MQTT_SKIP_MQTT", "False").lower() in ["true", "1", "yes"]
+
     try:
         knx_daemon: KNXDaemon = KNXDaemon(
             knx_gateway = config_parser.get("knx", "Gateway"),
             knx_project_path = config_parser.get("knx", "ProjectPath"),
             knx_keys_path = config_parser.get("knx", "KeysPath"),
             knxkeys_pw=knx_keys_pw,
-            mqtt_broker=config_parser.get("mqtt", "Broker"),
+            mqtt_broker=config_parser.get("mqtt", "Broker") if not skip_mqtt else None,
             mqtt_port=config_parser.getint("mqtt", "Port"),
             mqtt_client_id=config_parser.get("mqtt", "ClientID"),
             mqtt_main_topic=config_parser.get("mqtt", "MainTopic"),

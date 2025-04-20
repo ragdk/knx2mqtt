@@ -28,10 +28,10 @@ class MQTTClient:
         except ConnectionError as e:
             logger.error(f"Failed to connect to MQTT broker {self.broker}:{self.port}: {e}")
             exit(1)
-
+        logger.info(f"Connected to MQTT broker {self.broker}:{self.port}")
 
     def __on_message(self, client, userdata, msg):
-        logger.debug(f"Received message on topic {msg.topic}: {msg.payload.decode()}")
+        logger.info(f"Received message on topic {msg.topic}: {msg.payload.decode()}")
 
     def __on_publish(self, client, userdata, mid, reason_code, properties):
         if reason_code.is_failure:
@@ -57,7 +57,6 @@ class MQTTClient:
         # TODO: This is ust fire-and-forget, consider using QoS and error handling
         # topic = f"{self.pub_topic}/{deviceid}/{type}"
         topic = self.pub_topic
-
         try: # the value may not be JSON serializable
             json.dumps(value)
         except TypeError: # if so, convert to string
@@ -75,6 +74,7 @@ class MQTTClient:
         self.client.publish(topic, json.dumps(msg, ensure_ascii=False))
 
     def run(self):
+        logger.info(f"Running MQTT client - broker {self.broker}:{self.port}...")
         # Start the loop to process messages
         self.client.loop_start()
         self.is_running = True
@@ -87,7 +87,7 @@ class MQTTClient:
 # Example usage
 if __name__ == "__main__":
     logging.basicConfig(format="{asctime}: {levelname:<7}: {name:<17}: {message}", style="{", datefmt="%Y-%m-%d %H:%M", force=True)
-    logging.getLogger().setLevel(logging.INFO)
+    logging.getLogger().setLevel(logging.DEBUG)
 
     mqtt_client = MQTTClient("localhost", 1883, "test_client", "knx")
     mqtt_client.run()
