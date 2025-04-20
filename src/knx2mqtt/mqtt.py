@@ -87,7 +87,7 @@ class MQTTClient:
 # Example usage
 if __name__ == "__main__":
     logging.basicConfig(format="{asctime}: {levelname:<7}: {name:<17}: {message}", style="{", datefmt="%Y-%m-%d %H:%M", force=True)
-    logging.getLogger().setLevel(logging.DEBUG)
+    logging.getLogger(__name__).setLevel(logging.DEBUG)
 
     mqtt_client = MQTTClient("localhost", 1883, "test_client", "knx")
     mqtt_client.run()
