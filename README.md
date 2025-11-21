@@ -14,7 +14,8 @@ TODO
 Developing with uv (https://astral.sh/blog/uv)
 - sync packages with uv
 - run `uv run knx2mqtt --help` to get info.
-- In the terminal export env vars `KNX_KEYS_PW` with the KNX project password.
+- KNX IP Secure is enabled by default; pass `--no-knx-secure` to use a non-secure tunnel (still requires `KNX_KEYS_PW` for opening the KNX project).
+- In the terminal export env vars `KNX_KEYS_PW` with the KNX project password when connecting to a secure gateway.
 - Run
   - Standalone: `uv run knx2mqtt --config=[path to config file]`.
   - With Docker and incl. MQTT broker: `docker compose up`
