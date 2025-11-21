@@ -1,5 +1,6 @@
 # Specific files
 config.ini
+config-testbed1.ini
 
 # Python-generated files
 __pycache__/
