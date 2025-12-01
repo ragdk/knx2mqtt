@@ -14,7 +14,7 @@ class MQTTClient:
         self.pub_topic = f"{main_topic}/data"
         self.sub_topic = f"{main_topic}/cmd"
         self.is_running = False
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5, client_id=mqtt_client_id)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5, client_id=mqtt_client_id) # pyright: ignore[reportPrivateImportUsage]
         self.client.enable_logger()
 
         # Set callbacks
@@ -72,6 +72,7 @@ class MQTTClient:
         self.client.publish(topic, json.dumps(msg, ensure_ascii=False))
 
     def run(self):
+        logging.basicConfig(format="{asctime}: {levelname:<7}: {name:<17}: {message}", style="{", datefmt="%Y-%m-%d %H:%M", force=True)
         logger.info(f"Running MQTT client - broker {self.broker}:{self.port}...")
         # Start the loop to process messages
         self.client.loop_start()

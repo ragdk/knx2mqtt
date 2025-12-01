@@ -19,3 +19,8 @@ Developing with uv (https://astral.sh/blog/uv)
 - Run
   - Standalone: `uv run knx2mqtt --config=[path to config file]`.
   - With Docker and incl. MQTT broker: `docker compose up`
+
+# KNX monitor UI
+- A lightweight FastAPI + WebSocket UI streams KNX messages from MQTT. Run locally with `uv run knxmonitor --mqtt-broker <broker-host> --mqtt-main-topic knx --port 8000` (env vars `KNXMONITOR_MQTT_BROKER`, `KNXMONITOR_MQTT_PORT`, `KNXMONITOR_MQTT_MAIN_TOPIC`, `KNXMONITOR_PORT` supported).
+- Docker: `docker compose up knxmonitor` (service listens on port 8000 and depends on the `mqtt` service in the same compose file).
+- Features: live table with pause/clear, filter by address/device, reconnect logic, retains a small rolling buffer so late clients get a snapshot.

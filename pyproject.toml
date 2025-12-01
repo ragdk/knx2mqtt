@@ -9,7 +9,10 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.1.8",
+    "fastapi>=0.111.0",
     "paho-mqtt>=2.1.0",
+    "websockets>=12.0",
+    "uvicorn>=0.30.0",
     "xknx>=3.6.0",
     "xknxproject>=3.8.2",
 ]
@@ -17,6 +20,7 @@ dependencies = [
 [project.scripts]
 knx2mqtt = "knx2mqtt:main"
 knxproj2json = "knx2mqtt:print_knx_json"
+knxmonitor = "knxmonitor.main:cli"
 
 [build-system]
 requires = ["hatchling"]

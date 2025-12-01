@@ -24,3 +24,17 @@ services:
       - ${HOME}/Downloads/mosquitto/data:/mosquitto/data:rw
       - ${HOME}/Downloads/mosquitto/log:/mosquitto/log:rw
     restart: unless-stopped
+  knxmonitor:
+    build: .
+    depends_on:
+      mqtt:
+        condition: service_started
+    container_name: knxmonitor
+    environment:
+      - KNXMONITOR_MQTT_BROKER=mqtt
+      - KNXMONITOR_MQTT_PORT=1883
+      - KNXMONITOR_MQTT_MAIN_TOPIC=knx
+    entrypoint: ["uv", "run", "knxmonitor"]
+    command: ["--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"

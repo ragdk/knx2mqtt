@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KNX Monitor</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --accent: #22c55e;
+      --muted: #9ca3af;
+      --border: #1f2937;
+      --text: #e5e7eb;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --card: #0b1221;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Fira Code", "JetBrains Mono", "SFMono-Regular", "Menlo", monospace;
+      background: radial-gradient(120% 120% at 20% 20%, rgba(34, 197, 94, 0.1), transparent 45%), var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(90deg, rgba(34, 197, 94, 0.15), transparent 40%), var(--panel);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.3rem;
+      letter-spacing: 0.02em;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    h1 span {
+      padding: 0.25rem 0.5rem;
+      border-radius: 0.35rem;
+      background: rgba(34, 197, 94, 0.15);
+      color: var(--accent);
+      font-size: 0.8rem;
+    }
+    main { padding: 1rem 1.5rem 2rem; display: grid; gap: 1rem; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1rem;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .controls label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    input[type="text"] {
+      padding: 0.55rem 0.6rem;
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+    }
+    .buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    button {
+      background: var(--accent);
+      border: none;
+      color: #04210f;
+      padding: 0.55rem 0.9rem;
+      border-radius: 0.55rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+    button.secondary { background: var(--border); color: var(--text); }
+    button:hover { transform: translateY(-1px); box-shadow: 0 10px 30px rgba(34, 197, 94, 0.2); }
+    button:active { transform: translateY(0); box-shadow: none; }
+    .status {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+      font-size: 0.95rem;
+      color: var(--muted);
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.3rem 0.65rem;
+      border-radius: 999px;
+      background: var(--card);
+      border: 1px solid var(--border);
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.15);
+    }
+    .dot.ok { background: var(--accent); box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.15); }
+    .table-wrap { overflow: auto; border-radius: 0.75rem; border: 1px solid var(--border); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card);
+      min-width: 720px;
+    }
+    th, td {
+      padding: 0.65rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      font-size: 0.93rem;
+    }
+    th { color: var(--muted); font-weight: 600; background: rgba(255,255,255,0.02); position: sticky; top: 0; }
+    tr:hover td { background: rgba(34, 197, 94, 0.04); }
+    .muted { color: var(--muted); }
+    @media (max-width: 768px) {
+      header { position: static; }
+      table { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>KNX Monitor <span>live</span></h1>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="controls">
+        <label>
+          Filter by address/device
+          <input id="filter" type="text" placeholder="e.g. 1/2/3 or Kitchen">
+        </label>
+        <div class="buttons">
+          <button id="pause">Pause</button>
+          <button id="clear" class="secondary">Clear</button>
+        </div>
+        <div class="status">
+          <span class="pill"><span class="dot" id="status-dot"></span><span id="status-text">connecting…</span></span>
+          <span class="pill">Total: <strong id="count">0</strong></span>
+          <span class="pill">Shown: <strong id="shown">0</strong></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Device</th>
+            <th>Destination</th>
+            <th>Type</th>
+            <th>Value</th>
+            <th>Unit</th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const tableBody = document.getElementById("table-body");
+    const filterInput = document.getElementById("filter");
+    const countEl = document.getElementById("count");
+    const shownEl = document.getElementById("shown");
+    const pauseBtn = document.getElementById("pause");
+    const clearBtn = document.getElementById("clear");
+    const statusDot = document.getElementById("status-dot");
+    const statusText = document.getElementById("status-text");
+
+    let messages = [];
+    let paused = false;
+    let ws;
+    let reconnectDelay = 750;
+
+    function formatTime(ts) {
+      const d = new Date(ts);
+      if (isNaN(d.getTime())) return ts;
+      return d.toLocaleTimeString(undefined, { hour12: false }) + " " + d.toLocaleDateString();
+    }
+
+    function matchesFilter(msg, term) {
+      if (!term) return true;
+      const hay = `${msg.deviceid ?? ""} ${msg.destination ?? ""} ${msg.message_type ?? ""}`.toLowerCase();
+      return hay.includes(term.toLowerCase());
+    }
+
+    function render() {
+      const term = filterInput.value.trim();
+      const filtered = messages.filter(m => matchesFilter(m, term));
+      shownEl.textContent = filtered.length;
+
+      tableBody.innerHTML = filtered.map(m => `
+        <tr>
+          <td class="muted">${formatTime(m.timestamp)}</td>
+          <td>${m.deviceid ?? "—"}</td>
+          <td>${m.destination ?? "—"}</td>
+          <td>${m.type ?? m.message_type ?? "—"}</td>
+          <td>${m.value ?? "—"}</td>
+          <td>${m.unit ?? "—"}</td>
+        </tr>
+      `).join("");
+    }
+
+    function updateStatus(ok, text) {
+      statusDot.classList.toggle("ok", ok);
+      statusText.textContent = text;
+    }
+
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const url = `${proto}://${location.host}/ws`;
+      updateStatus(false, "connecting…");
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        updateStatus(true, "connected");
+        reconnectDelay = 750;
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === "snapshot" && Array.isArray(data.messages)) {
+          messages = data.messages;
+          countEl.textContent = messages.length;
+        } else {
+          messages.push(data);
+          countEl.textContent = Number(countEl.textContent) + 1;
+        }
+        if (!paused) render();
+      };
+
+      ws.onclose = () => {
+        updateStatus(false, "reconnecting…");
+        setTimeout(connect, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 1.5, 5000);
+      };
+    }
+
+    filterInput.addEventListener("input", render);
+    pauseBtn.addEventListener("click", () => {
+      paused = !paused;
+      pauseBtn.textContent = paused ? "Resume" : "Pause";
+      if (!paused) render();
+    });
+    clearBtn.addEventListener("click", () => {
+      messages = [];
+      countEl.textContent = "0";
+      render();
+    });
+
+    connect();
+  </script>
+</body>
+</html>
