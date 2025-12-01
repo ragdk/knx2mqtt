@@ -145,12 +145,29 @@
     <section class="panel">
       <div class="controls">
         <label>
-          Filter by address/device
-          <input id="filter" type="text" placeholder="e.g. 1/2/3 or Kitchen">
+          Device
+          <input id="filter-device" type="text" placeholder="Comma-separated (e.g. 1/2/3, Kitchen)">
+        </label>
+        <label>
+          Destination
+          <input id="filter-destination" type="text" placeholder="e.g. 2/3/4">
+        </label>
+        <label>
+          Type
+          <input id="filter-type" type="text" placeholder="e.g. temperature">
+        </label>
+        <label>
+          Unit
+          <input id="filter-unit" type="text" placeholder="e.g. °C">
+        </label>
+        <label>
+          Value
+          <input id="filter-value" type="text" placeholder="e.g. 22, on">
         </label>
         <div class="buttons">
           <button id="pause">Pause</button>
           <button id="clear" class="secondary">Clear</button>
+          <button id="sort-time" class="secondary">Sort: newest first</button>
         </div>
         <div class="status">
           <span class="pill"><span class="dot" id="status-dot"></span><span id="status-text">connecting…</span></span>
@@ -179,16 +196,24 @@
 
   <script>
     const tableBody = document.getElementById("table-body");
-    const filterInput = document.getElementById("filter");
+    const filterInputs = {
+      deviceid: document.getElementById("filter-device"),
+      destination: document.getElementById("filter-destination"),
+      type: document.getElementById("filter-type"),
+      unit: document.getElementById("filter-unit"),
+      value: document.getElementById("filter-value"),
+    };
     const countEl = document.getElementById("count");
     const shownEl = document.getElementById("shown");
     const pauseBtn = document.getElementById("pause");
     const clearBtn = document.getElementById("clear");
+    const sortBtn = document.getElementById("sort-time");
     const statusDot = document.getElementById("status-dot");
     const statusText = document.getElementById("status-text");
 
     let messages = [];
     let paused = false;
+    let sortAsc = false; // default newest first
     let ws;
     let reconnectDelay = 750;
 
@@ -198,15 +223,40 @@
       return d.toLocaleTimeString(undefined, { hour12: false }) + " " + d.toLocaleDateString();
     }
 
-    function matchesFilter(msg, term) {
-      if (!term) return true;
-      const hay = `${msg.deviceid ?? ""} ${msg.destination ?? ""} ${msg.message_type ?? ""}`.toLowerCase();
-      return hay.includes(term.toLowerCase());
+    function parseTerms(value) {
+      return value.split(",").map(v => v.trim()).filter(Boolean);
+    }
+
+    function fieldMatches(fieldValue, terms) {
+      if (!terms.length) return true;
+      const hay = String(fieldValue ?? "").toLowerCase();
+      return terms.some(term => hay.includes(term.toLowerCase()));
+    }
+
+    function matchesFilters(msg) {
+      const filters = {
+        deviceid: parseTerms(filterInputs.deviceid.value),
+        destination: parseTerms(filterInputs.destination.value),
+        type: parseTerms(filterInputs.type.value),
+        unit: parseTerms(filterInputs.unit.value),
+        value: parseTerms(filterInputs.value.value),
+      };
+      return (
+        fieldMatches(msg.deviceid, filters.deviceid) &&
+        fieldMatches(msg.destination, filters.destination) &&
+        fieldMatches(msg.type ?? msg.message_type, filters.type) &&
+        fieldMatches(msg.unit, filters.unit) &&
+        fieldMatches(msg.value, filters.value)
+      );
     }
 
     function render() {
-      const term = filterInput.value.trim();
-      const filtered = messages.filter(m => matchesFilter(m, term));
+      const sorted = [...messages].sort((a, b) => {
+        const at = new Date(a.timestamp).getTime();
+        const bt = new Date(b.timestamp).getTime();
+        return sortAsc ? at - bt : bt - at;
+      });
+      const filtered = sorted.filter(matchesFilters);
       shownEl.textContent = filtered.length;
 
       tableBody.innerHTML = filtered.map(m => `
@@ -256,7 +306,7 @@
       };
     }
 
-    filterInput.addEventListener("input", render);
+    Object.values(filterInputs).forEach(input => input.addEventListener("input", render));
     pauseBtn.addEventListener("click", () => {
       paused = !paused;
       pauseBtn.textContent = paused ? "Resume" : "Pause";
@@ -265,6 +315,11 @@
     clearBtn.addEventListener("click", () => {
       messages = [];
       countEl.textContent = "0";
+      render();
+    });
+    sortBtn.addEventListener("click", () => {
+      sortAsc = !sortAsc;
+      sortBtn.textContent = sortAsc ? "Sort: oldest first" : "Sort: newest first";
       render();
     });
 
