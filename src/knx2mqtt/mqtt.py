@@ -65,11 +65,9 @@ class MQTTClient:
             "deviceid": deviceid,
             "timestamp": datetime.datetime.now().isoformat(),
             "destination": destination,
-            "payload": {
-                "type": type,
-                "unit": unit,
-                "value": value
-            }
+            "type": type,
+            "unit": unit,
+            "value": value
         }
         self.client.publish(topic, json.dumps(msg, ensure_ascii=False))
 

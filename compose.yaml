@@ -7,11 +7,12 @@ services:
     container_name: knx2mqtt
     environment:
       - KNX_KEYS_PW=${KNX_KEYS_PW}
+      - KNX_FILE_BASE_PATH=${KNX_BASE_PATH}
       - KNX2MQTT_SKIP_MQTT=${KNX2MQTT_SKIP_MQTT}
     volumes:
       - ./config-docker-compose.ini:/app/config.ini
-      - ${HOME}/Documents/Trifork/KNX/TSB1-ANRO-0302-25.knxproj:/app/knx.knxproj:ro
-      - ${HOME}/Documents/Trifork/KNX/TSB1-ANRO-0302-25.knxkeys:/app/knx.knxkeys:ro
+      - ${KNX_FILE_BASE_PATH}.knxproj:/app/knx.knxproj:ro
+      - ${KNX_FILE_BASE_PATH}.knxkeys:/app/knx.knxkeys:ro
   mqtt:
     image: eclipse-mosquitto:2.0
     container_name: mqtt
@@ -19,6 +20,7 @@ services:
       - "1883:1883"
     volumes:
       - ${HOME}/Downloads/mosquitto/config:/mosquitto/config:rw
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:r
       - ${HOME}/Downloads/mosquitto/data:/mosquitto/data:rw
       - ${HOME}/Downloads/mosquitto/log:/mosquitto/log:rw
     restart: unless-stopped
