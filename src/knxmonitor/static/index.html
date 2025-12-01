@@ -149,8 +149,16 @@
           <input id="filter-device" type="text" placeholder="Comma-separated (e.g. 1/2/3, Kitchen)">
         </label>
         <label>
+          Device name
+          <input id="filter-device-name" type="text" placeholder="e.g. Touch panel">
+        </label>
+        <label>
           Destination
           <input id="filter-destination" type="text" placeholder="e.g. 2/3/4">
+        </label>
+        <label>
+          Destination name
+          <input id="filter-destination-name" type="text" placeholder="e.g. Valve actuator">
         </label>
         <label>
           Type
@@ -164,16 +172,33 @@
           Value
           <input id="filter-value" type="text" placeholder="e.g. 22, on">
         </label>
-        <div class="buttons">
-          <button id="pause">Pause</button>
-          <button id="clear" class="secondary">Clear</button>
-          <button id="sort-time" class="secondary">Sort: newest first</button>
-        </div>
-        <div class="status">
-          <span class="pill"><span class="dot" id="status-dot"></span><span id="status-text">connecting…</span></span>
-          <span class="pill">Total: <strong id="count">0</strong></span>
-          <span class="pill">Shown: <strong id="shown">0</strong></span>
-        </div>
+        <label>
+          Direction
+          <input id="filter-direction" type="text" placeholder="e.g. Incoming, Outgoing">
+        </label>
+        <label style="grid-column: 1 / -1;">
+          Describe what to monitor
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <input id="nl-query" type="text" placeholder="e.g. Troubleshoot heat control in the cantina" style="flex: 1 1 320px;">
+            <button id="nl-run" type="button">Interpret</button>
+            <button id="clear-filters" type="button" class="secondary">Clear filters</button>
+          </div>
+          <small id="nl-status" class="muted"></small>
+        </label>
+        <label style="grid-column: 1 / -1;">
+          <div class="buttons">
+            <button id="pause">Pause</button>
+            <button id="clear" class="secondary">Clear</button>
+            <button id="sort-time" class="secondary">Sort: newest first</button>
+          </div>
+        </label>
+        <label style="grid-column: 1 / -1;">
+          <div class="status">
+            <span class="pill"><span class="dot" id="status-dot"></span><span id="status-text">connecting…</span></span>
+            <span class="pill">Total: <strong id="count">0</strong></span>
+            <span class="pill">Shown: <strong id="shown">0</strong></span>
+          </div>
+        </label>
       </div>
     </section>
 
@@ -183,10 +208,13 @@
           <tr>
             <th>Time</th>
             <th>Device</th>
+            <th>Device name</th>
             <th>Destination</th>
+            <th>Destination name</th>
             <th>Type</th>
             <th>Value</th>
             <th>Unit</th>
+            <th>Direction</th>
           </tr>
         </thead>
         <tbody id="table-body"></tbody>
@@ -198,16 +226,23 @@
     const tableBody = document.getElementById("table-body");
     const filterInputs = {
       deviceid: document.getElementById("filter-device"),
+      device_name: document.getElementById("filter-device-name"),
       destination: document.getElementById("filter-destination"),
+      destination_name: document.getElementById("filter-destination-name"),
       type: document.getElementById("filter-type"),
       unit: document.getElementById("filter-unit"),
       value: document.getElementById("filter-value"),
+      direction: document.getElementById("filter-direction"),
     };
     const countEl = document.getElementById("count");
     const shownEl = document.getElementById("shown");
     const pauseBtn = document.getElementById("pause");
     const clearBtn = document.getElementById("clear");
     const sortBtn = document.getElementById("sort-time");
+    const nlInput = document.getElementById("nl-query");
+    const nlBtn = document.getElementById("nl-run");
+    const clearFiltersBtn = document.getElementById("clear-filters");
+    const nlStatus = document.getElementById("nl-status");
     const statusDot = document.getElementById("status-dot");
     const statusText = document.getElementById("status-text");
 
@@ -236,17 +271,23 @@
     function matchesFilters(msg) {
       const filters = {
         deviceid: parseTerms(filterInputs.deviceid.value),
+        device_name: parseTerms(filterInputs.device_name.value),
         destination: parseTerms(filterInputs.destination.value),
+        destination_name: parseTerms(filterInputs.destination_name.value),
         type: parseTerms(filterInputs.type.value),
         unit: parseTerms(filterInputs.unit.value),
         value: parseTerms(filterInputs.value.value),
+        direction: parseTerms(filterInputs.direction.value),
       };
       return (
         fieldMatches(msg.deviceid, filters.deviceid) &&
+        fieldMatches(msg.device_name, filters.device_name) &&
         fieldMatches(msg.destination, filters.destination) &&
+        fieldMatches(msg.destination_name, filters.destination_name) &&
         fieldMatches(msg.type ?? msg.message_type, filters.type) &&
         fieldMatches(msg.unit, filters.unit) &&
-        fieldMatches(msg.value, filters.value)
+        fieldMatches(msg.value, filters.value) &&
+        fieldMatches(msg.direction, filters.direction)
       );
     }
 
@@ -263,10 +304,13 @@
         <tr>
           <td class="muted">${formatTime(m.timestamp)}</td>
           <td>${m.deviceid ?? "—"}</td>
+          <td>${m.device_name ?? "—"}</td>
           <td>${m.destination ?? "—"}</td>
+          <td>${m.destination_name ?? "—"}</td>
           <td>${m.type ?? m.message_type ?? "—"}</td>
           <td>${m.value ?? "—"}</td>
           <td>${m.unit ?? "—"}</td>
+          <td>${m.direction ?? "—"}</td>
         </tr>
       `).join("");
     }
@@ -274,6 +318,11 @@
     function updateStatus(ok, text) {
       statusDot.classList.toggle("ok", ok);
       statusText.textContent = text;
+    }
+
+    function clearFilters() {
+      Object.values(filterInputs).forEach(input => input.value = "");
+      nlInput.value = "";
     }
 
     function connect() {
@@ -317,10 +366,49 @@
       countEl.textContent = "0";
       render();
     });
+    clearFiltersBtn.addEventListener("click", () => {
+      clearFilters();
+      nlStatus.textContent = "";
+      render();
+    });
     sortBtn.addEventListener("click", () => {
       sortAsc = !sortAsc;
       sortBtn.textContent = sortAsc ? "Sort: oldest first" : "Sort: newest first";
       render();
+    });
+    nlBtn.addEventListener("click", async () => {
+      const query = nlInput.value.trim();
+      if (!query) return;
+      nlStatus.textContent = "Interpreting…";
+      try {
+        const res = await fetch("/api/nl-filter", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.detail || `Request failed (${res.status})`);
+        }
+        const data = await res.json();
+        clearFilters();
+        if (data.devices?.length) {
+          filterInputs.deviceid.value = data.devices.join(", ");
+        }
+        if (data.destinations?.length) {
+          filterInputs.destination.value = data.destinations.join(", ");
+        }
+        nlStatus.textContent = data.explanation || "Applied filters from NL query.";
+        render();
+      } catch (err) {
+        nlStatus.textContent = `NL filter failed: ${err.message}`;
+      }
+    });
+    nlInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        nlBtn.click();
+      }
     });
 
     connect();

@@ -20,7 +20,7 @@ services:
       - "1883:1883"
     volumes:
       - ${HOME}/Downloads/mosquitto/config:/mosquitto/config:rw
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:r
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ${HOME}/Downloads/mosquitto/data:/mosquitto/data:rw
       - ${HOME}/Downloads/mosquitto/log:/mosquitto/log:rw
     restart: unless-stopped
@@ -34,6 +34,11 @@ services:
       - KNXMONITOR_MQTT_BROKER=mqtt
       - KNXMONITOR_MQTT_PORT=1883
       - KNXMONITOR_MQTT_MAIN_TOPIC=knx
+      - KNX_KEYS_PW=${KNX_KEYS_PW}
+      - KNX_FILE_BASE_PATH=${KNX_BASE_PATH}
+      - KNXMONITOR_KNXPROJ_PATH=/app/knx.knxproj
+    volumes:
+      - ${KNX_FILE_BASE_PATH}.knxproj:/app/knx.knxproj:ro
     entrypoint: ["uv", "run", "knxmonitor"]
     command: ["--host", "0.0.0.0", "--port", "8000"]
     ports:

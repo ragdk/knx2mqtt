@@ -8,12 +8,13 @@ from typing import Any
 
 import click
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .mqtt_client import MonitorMQTTClient
+from .project_index import ProjectIndex, NLResult
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ class Settings:
     queue_size: int = 500
     host: str = "0.0.0.0"
     port: int = 8000
+    knxproj_path: str | None = None
+    knxproj_password: str | None = None
 
 
 class KnxMessage(BaseModel):
@@ -35,8 +38,11 @@ class KnxMessage(BaseModel):
     timestamp: str
     destination: str
     message_type: str | None = Field(None, alias="type")
+    device_name: str | None = None
     unit: str | None = None
     value: Any = None
+    direction: str | None = None
+    destination_name: str | None = None
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
@@ -70,6 +76,7 @@ class RuntimeState:
     manager: ConnectionManager
     dispatch_task: asyncio.Task | None = None
     mqtt_client: MonitorMQTTClient | None = None
+    project_index: ProjectIndex | None = None
 
 
 def settings_from_env() -> Settings:
@@ -82,6 +89,8 @@ def settings_from_env() -> Settings:
         queue_size=int(os.getenv("KNXMONITOR_QUEUE_SIZE", "500")),
         host=os.getenv("KNXMONITOR_HOST", "0.0.0.0"),
         port=int(os.getenv("KNXMONITOR_PORT", "8000")),
+        knxproj_path=os.getenv("KNXMONITOR_KNXPROJ_PATH"),
+        knxproj_password=os.getenv("KNXMONITOR_KNXPROJ_PASSWORD") or os.getenv("KNX_KEYS_PW"),
     )
 
 
@@ -125,6 +134,13 @@ def create_app(settings: Settings) -> FastAPI:
             runtime.queue,
         )
         runtime.mqtt_client.start()
+        if settings.knxproj_path:
+            try:
+                runtime.project_index = ProjectIndex(settings.knxproj_path, password=settings.knxproj_password)
+                runtime.project_index.load()
+            except Exception as exc:
+                logger.warning("Could not load KNX project for NL queries: %s", exc)
+                runtime.project_index = None
 
     @app.on_event("shutdown")
     async def shutdown_event():
@@ -144,6 +160,20 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/api/messages")
     async def get_messages():
         return list(runtime.buffer)
+
+    class NLQuery(BaseModel):
+        query: str
+
+    @app.post("/api/nl-filter")
+    async def nl_filter(body: NLQuery):
+        if not runtime.project_index:
+            raise HTTPException(status_code=503, detail="KNX project not loaded for NL filtering.")
+        result: NLResult = runtime.project_index.search(body.query)
+        return {
+            "devices": result.devices,
+            "destinations": result.destinations,
+            "explanation": result.explanation,
+        }
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
@@ -182,6 +212,8 @@ def configure_logging():
 @click.option("--queue-size", default=None, type=int, help="Max queued MQTT messages awaiting broadcast.")
 @click.option("--host", default=None, help="Web server host.")
 @click.option("--port", default=None, type=int, help="Web server port.")
+@click.option("--knxproj-path", default=None, help="Path to KNX project file for NL filtering.")
+@click.option("--knxproj-password", default=None, help="Password for KNX project file (if needed).")
 def cli(
     mqtt_broker: str | None,
     mqtt_port: int | None,
@@ -191,6 +223,8 @@ def cli(
     queue_size: int | None,
     host: str | None,
     port: int | None,
+    knxproj_path: str | None,
+    knxproj_password: str | None,
 ):
     """Run the KNX monitor web UI."""
     configure_logging()
@@ -204,6 +238,8 @@ def cli(
         queue_size=queue_size or base_settings.queue_size,
         host=host or base_settings.host,
         port=port or base_settings.port,
+        knxproj_path=knxproj_path or base_settings.knxproj_path,
+        knxproj_password=knxproj_password or base_settings.knxproj_password,
     )
 
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, reload=False)

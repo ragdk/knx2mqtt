@@ -53,7 +53,7 @@ class MQTTClient:
         logger.info(f"Disconnected from broker: {reason_code}.")
         self.is_running = False
 
-    def publish(self, deviceid, type, unit, value, destination):
+    def publish(self, deviceid, type, unit, value, destination, direction=None, destination_name=None, device_name=None):
         # TODO: This is ust fire-and-forget, consider using QoS and error handling
         # topic = f"{self.pub_topic}/{deviceid}/{type}"
         topic = self.pub_topic
@@ -67,7 +67,10 @@ class MQTTClient:
             "destination": destination,
             "type": type,
             "unit": unit,
-            "value": value
+            "value": value,
+            "direction": direction,
+            "destination_name": destination_name,
+            "device_name": device_name,
         }
         self.client.publish(topic, json.dumps(msg, ensure_ascii=False))
 

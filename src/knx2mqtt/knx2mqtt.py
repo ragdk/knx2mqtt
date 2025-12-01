@@ -191,6 +191,9 @@ class KNXDaemon:
                     unit=unit,
                     value=value,
                     destination=destination,
+                    direction=direction,
+                    destination_name=destination_name,
+                    device_name=device_name,
                 )
         else:
             # print to console
