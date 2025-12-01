@@ -73,7 +73,7 @@ class KNXDaemon:
                 logger.error(f"KNX keys file {knx_keys_path} does not exist.")
                 do_exit = True
         elif knx_keys_path and not os.path.exists(knx_keys_path):
-            logger.warning(f"KeysPath provided but KNX IP Secure disabled (--no-knx-secure); ignoring missing keys file {knx_keys_path}.")
+            logger.warning(f"KeysPath provided but KNX IP Secure disabled via config; ignoring missing keys file {knx_keys_path}.")
         if do_exit:
             exit(1)
 
@@ -89,7 +89,7 @@ class KNXDaemon:
         self.address_filters: list[AddressFilter] = None
         self.group_addresses: dict[str: GroupAddressInfo] = {}
         if not self.secure_enabled:
-            logger.info("KNX IP Secure disabled via --no-knx-secure; using non-secure KNX tunneling.")
+            logger.info("KNX IP Secure disabled via config (Secure = false); using non-secure KNX tunneling.")
 
         # extract knx project with info about devices, group addresses etc.
         self.knx_project = None
@@ -218,16 +218,15 @@ class KNXDaemon:
             self.mqtt_client.run()
         asyncio.run(self.__run_async())
     
-    def stop(self):
+    async def stop(self):
         if self.mqtt:
             self.mqtt_client.disconnect()
         if self.xknx_daemon:
-            self.xknx_daemon.stop()
+            await self.xknx_daemon.stop()
 
 @click.command()
 @click.option('--config', help='Path to the configuration file.', type=click.Path(exists=True), required=True)
-@click.option('--knx-secure/--no-knx-secure', default=True, help='Enable or disable KNX IP Secure (defaults to enabled).')
-def knx2mqtt(config, knx_secure):
+def knx2mqtt(config):
     """A light KNX to MQTT daemon.
     
     All configuration is done via the config file, except for the KNX keys file password, 
@@ -259,7 +258,7 @@ def knx2mqtt(config, knx_secure):
             knx_project_path = config_parser.get("knx", "ProjectPath"),
             knx_keys_path = config_parser.get("knx", "KeysPath", fallback=None),
             knxkeys_pw=knx_keys_pw,
-            knx_secure=knx_secure,
+            knx_secure=config_parser.getboolean("knx", "Secure", fallback=True),
             mqtt_broker=config_parser.get("mqtt", "Broker") if not skip_mqtt else None,
             mqtt_port=config_parser.getint("mqtt", "Port"),
             mqtt_client_id=config_parser.get("mqtt", "ClientID"),
