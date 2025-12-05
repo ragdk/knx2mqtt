@@ -7,7 +7,6 @@ services:
     container_name: knx2mqtt
     environment:
       - KNX_KEYS_PW=${KNX_KEYS_PW}
-      - KNX_FILE_BASE_PATH=${KNX_BASE_PATH}
       - KNX2MQTT_SKIP_MQTT=${KNX2MQTT_SKIP_MQTT}
     volumes:
       - ./config-docker-compose.ini:/app/config.ini
@@ -35,7 +34,6 @@ services:
       - KNXMONITOR_MQTT_PORT=1883
       - KNXMONITOR_MQTT_MAIN_TOPIC=knx
       - KNX_KEYS_PW=${KNX_KEYS_PW}
-      - KNX_FILE_BASE_PATH=${KNX_BASE_PATH}
       - KNXMONITOR_KNXPROJ_PATH=/app/knx.knxproj
     volumes:
       - ${KNX_FILE_BASE_PATH}.knxproj:/app/knx.knxproj:ro
