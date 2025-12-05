@@ -36,7 +36,7 @@ class GroupAddressInfo:
         self.name = name
         self.description = description
         self.dpt_main = dpt_main
-        self.dpt_sub = dpt_main
+        self.dpt_sub = dpt_sub
         self.transcoder = dpt.DPTBase.transcoder_by_dpt(dpt_main, dpt_sub)
 
 class KNXDaemon:
@@ -148,7 +148,11 @@ class KNXDaemon:
     def __telegram_received_cb(self, telegram: Telegram):
         if self.knx_project:
             payload = telegram.payload
-            ga = self.group_addresses[str(telegram.destination_address)]
+            destination = str(telegram.destination_address)
+            ga = self.group_addresses.get(destination)
+            if not ga:
+                logger.warning(f"Skipping telegram for unknown destination address {destination}")
+                return
             transcoder = ga.transcoder
 
             if transcoder:
