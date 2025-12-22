@@ -38,6 +38,7 @@ class KnxMessage(BaseModel):
     timestamp: str
     destination: str
     message_type: str | None = Field(None, alias="type")
+    knx_message_type: str | None = None
     device_name: str | None = None
     unit: str | None = None
     value: Any = None
@@ -164,6 +165,9 @@ def create_app(settings: Settings) -> FastAPI:
     class NLQuery(BaseModel):
         query: str
 
+    class ReadRequest(BaseModel):
+        destinations: list[str]
+
     @app.post("/api/nl-filter")
     async def nl_filter(body: NLQuery):
         if not runtime.project_index:
@@ -174,6 +178,12 @@ def create_app(settings: Settings) -> FastAPI:
             "destinations": result.destinations,
             "explanation": result.explanation,
         }
+
+    @app.get("/api/ga-index")
+    async def ga_index():
+        if not runtime.project_index:
+            raise HTTPException(status_code=503, detail="KNX project not loaded for group address index.")
+        return {"group_addresses": runtime.project_index.group_address_index()}
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
@@ -188,6 +198,20 @@ def create_app(settings: Settings) -> FastAPI:
         except Exception:
             runtime.manager.disconnect(websocket)
             raise
+
+    @app.post("/api/read-group-addresses")
+    async def read_group_addresses(body: ReadRequest):
+        if not runtime.mqtt_client:
+            raise HTTPException(status_code=503, detail="MQTT client not ready for KNX reads.")
+        destinations = [dest for dest in body.destinations if dest]
+        if not destinations:
+            raise HTTPException(status_code=400, detail="No destinations provided.")
+        try:
+            runtime.mqtt_client.request_group_reads(destinations)
+        except Exception as exc:
+            logger.error("Failed to publish KNX read request: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to publish read request.")
+        return {"status": "queued", "count": len(destinations)}
 
     return app
 

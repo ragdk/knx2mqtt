@@ -47,6 +47,10 @@
       color: var(--accent);
       font-size: 0.8rem;
     }
+    h2 {
+      margin: 0 0 0.2rem;
+      font-size: 1.05rem;
+    }
     main { padding: 1rem 1.5rem 2rem; display: grid; gap: 1rem; }
     .panel {
       background: var(--panel);
@@ -130,9 +134,55 @@
     th { color: var(--muted); font-weight: 600; background: rgba(255,255,255,0.02); position: sticky; top: 0; }
     tr:hover td { background: rgba(34, 197, 94, 0.04); }
     .muted { color: var(--muted); }
+    .ga-summary {
+      display: grid;
+      gap: 0.75rem;
+    }
+    .hidden { display: none; }
+    .ga-summary-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .ga-summary-columns {
+      display: grid;
+      grid-template-columns: 1fr 1.4fr 0.9fr 0.8fr 0.6fr;
+      gap: 0.35rem;
+      padding: 0.35rem 0.65rem;
+      border-radius: 0.55rem;
+      background: rgba(255, 255, 255, 0.03);
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+    .ga-summary-list {
+      display: grid;
+      gap: 0.5rem;
+      max-height: 220px;
+      overflow-y: auto;
+      padding-right: 0.25rem;
+    }
+    .ga-item {
+      display: grid;
+      grid-template-columns: 1fr 1.4fr 0.9fr 0.8fr 0.6fr;
+      gap: 0.35rem;
+      padding: 0.55rem 0.65rem;
+      border-radius: 0.55rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+    }
+    .ga-destination { font-weight: 700; }
+    .ga-type { color: var(--muted); }
+    .ga-value { color: var(--accent); font-weight: 600; }
+    .ga-unit { color: var(--muted); }
     @media (max-width: 768px) {
       header { position: static; }
       table { min-width: 0; }
+      .ga-item { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -163,6 +213,10 @@
         <label>
           Type
           <input id="filter-type" type="text" placeholder="e.g. temperature">
+        </label>
+        <label>
+          KNX Msg Type
+          <input id="filter-knx-message-type" type="text" placeholder="e.g. GROUP_WRITE">
         </label>
         <label>
           Unit
@@ -202,6 +256,27 @@
       </div>
     </section>
 
+    <section class="panel ga-summary hidden" id="ga-summary-panel">
+      <div class="ga-summary-header">
+        <div>
+          <h2>Group address snapshot</h2>
+          <div class="muted">Latest values for filtered destinations.</div>
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <button id="ga-read" type="button">KNX read filtered</button>
+          <small id="ga-status" class="muted"></small>
+        </div>
+      </div>
+      <div class="ga-summary-columns" id="ga-summary-columns">
+        <div>Group address</div>
+        <div>GA name</div>
+        <div>Type</div>
+        <div>Value</div>
+        <div>Unit</div>
+      </div>
+      <div class="ga-summary-list" id="ga-summary-list"></div>
+    </section>
+
     <section class="panel table-wrap">
       <table>
         <thead>
@@ -214,6 +289,7 @@
             <th>Type</th>
             <th>Value</th>
             <th>Unit</th>
+            <th>KNX Msg Type</th>
             <th>Direction</th>
           </tr>
         </thead>
@@ -230,6 +306,7 @@
       destination: document.getElementById("filter-destination"),
       destination_name: document.getElementById("filter-destination-name"),
       type: document.getElementById("filter-type"),
+      knx_message_type: document.getElementById("filter-knx-message-type"),
       unit: document.getElementById("filter-unit"),
       value: document.getElementById("filter-value"),
       direction: document.getElementById("filter-direction"),
@@ -245,12 +322,20 @@
     const nlStatus = document.getElementById("nl-status");
     const statusDot = document.getElementById("status-dot");
     const statusText = document.getElementById("status-text");
+    const gaPanel = document.getElementById("ga-summary-panel");
+    const gaColumns = document.getElementById("ga-summary-columns");
+    const gaList = document.getElementById("ga-summary-list");
+    const gaReadBtn = document.getElementById("ga-read");
+    const gaStatus = document.getElementById("ga-status");
 
+    let gaIndex = {};
+    const latestByDest = new Map();
     let messages = [];
     let paused = false;
     let sortAsc = false; // default newest first
     let ws;
     let reconnectDelay = 750;
+    let currentGaDestinations = [];
 
     function formatTime(ts) {
       const d = new Date(ts);
@@ -275,6 +360,7 @@
         destination: parseTerms(filterInputs.destination.value),
         destination_name: parseTerms(filterInputs.destination_name.value),
         type: parseTerms(filterInputs.type.value),
+        knx_message_type: parseTerms(filterInputs.knx_message_type.value),
         unit: parseTerms(filterInputs.unit.value),
         value: parseTerms(filterInputs.value.value),
         direction: parseTerms(filterInputs.direction.value),
@@ -285,10 +371,98 @@
         fieldMatches(msg.destination, filters.destination) &&
         fieldMatches(msg.destination_name, filters.destination_name) &&
         fieldMatches(msg.type ?? msg.message_type, filters.type) &&
+        fieldMatches(msg.knx_message_type, filters.knx_message_type) &&
         fieldMatches(msg.unit, filters.unit) &&
         fieldMatches(msg.value, filters.value) &&
         fieldMatches(msg.direction, filters.direction)
       );
+    }
+
+    function destinationsFilterActive() {
+      return parseTerms(filterInputs.destination.value).length > 0;
+    }
+
+    function looksLikeAddress(term) {
+      return /\\d/.test(term) && term.includes("/");
+    }
+
+    function formatDpt(meta) {
+      if (!meta) return "-";
+      const main = meta.dpt_main;
+      const sub = meta.dpt_sub;
+      if (main == null) return "-";
+      if (sub == null) return `DPT ${main}`;
+      return `DPT ${main}.${String(sub).padStart(3, "0")}`;
+    }
+
+    function filteredGroupAddresses() {
+      const terms = parseTerms(filterInputs.destination.value);
+      if (!terms.length) return [];
+      const addresses = Object.keys(gaIndex);
+      if (!addresses.length) {
+        return terms.slice().sort((a, b) => a.localeCompare(b));
+      }
+      const matched = addresses.filter(addr => fieldMatches(addr, terms));
+      const matchedSet = new Set(matched);
+      terms.forEach(term => {
+        if (!matchedSet.has(term) && looksLikeAddress(term)) {
+          matched.push(term);
+        }
+      });
+      return matched.sort((a, b) => a.localeCompare(b));
+    }
+
+    function trackLatest(msg) {
+      const dest = msg.destination;
+      if (!dest) return;
+      const ts = new Date(msg.timestamp).getTime();
+      if (Number.isNaN(ts)) return;
+      const existing = latestByDest.get(dest);
+      if (!existing || ts > existing.timestamp) {
+        latestByDest.set(dest, { msg, timestamp: ts });
+      }
+    }
+
+    function updateGroupSummary(filteredMessages) {
+        const active = destinationsFilterActive();
+        if (!active) {
+          gaPanel.classList.add("hidden");
+          gaPanel.style.display = "none";
+          gaColumns.classList.add("hidden");
+          gaColumns.style.display = "none";
+          gaList.innerHTML = "";
+          gaStatus.textContent = "";
+          currentGaDestinations = [];
+          gaReadBtn.disabled = true;
+          return;
+        }
+
+        const fromIndex = filteredGroupAddresses();
+        const destinations = fromIndex;
+        currentGaDestinations = destinations;
+        gaPanel.classList.toggle("hidden", false);
+        gaPanel.style.display = "grid";
+        gaColumns.classList.toggle("hidden", false);
+        gaColumns.style.display = "grid";
+        gaReadBtn.disabled = currentGaDestinations.length === 0;
+        gaList.innerHTML = destinations.length ? destinations.map(dest => {
+          const meta = gaIndex[dest];
+          const latest = latestByDest.get(dest);
+          const msg = latest?.msg;
+          const name = meta?.name || msg?.destination_name || "-";
+          const type = msg?.type || msg?.message_type || formatDpt(meta);
+          const value = msg?.value ?? "-";
+          const unit = msg?.unit || meta?.unit || "-";
+          return `
+          <div class="ga-item">
+            <div class="ga-destination">${dest}</div>
+            <div class="muted">${name}</div>
+            <div class="ga-type">${type}</div>
+            <div class="ga-value">${value}</div>
+            <div class="ga-unit">${unit}</div>
+          </div>
+        `;
+        }).join("") : '<div class="muted">No group addresses match the current filter.</div>';
     }
 
     function render() {
@@ -310,9 +484,11 @@
           <td>${m.type ?? m.message_type ?? "—"}</td>
           <td>${m.value ?? "—"}</td>
           <td>${m.unit ?? "—"}</td>
+          <td>${m.knx_message_type ?? "—"}</td>
           <td>${m.direction ?? "—"}</td>
         </tr>
       `).join("");
+      updateGroupSummary(filtered);
     }
 
     function updateStatus(ok, text) {
@@ -340,9 +516,11 @@
         const data = JSON.parse(event.data);
         if (data.type === "snapshot" && Array.isArray(data.messages)) {
           messages = data.messages;
+          data.messages.forEach(trackLatest);
           countEl.textContent = messages.length;
         } else {
           messages.push(data);
+          trackLatest(data);
           countEl.textContent = Number(countEl.textContent) + 1;
         }
         if (!paused) render();
@@ -353,6 +531,20 @@
         setTimeout(connect, reconnectDelay);
         reconnectDelay = Math.min(reconnectDelay * 1.5, 5000);
       };
+    }
+
+    async function loadGaIndex() {
+      try {
+        const res = await fetch("/api/ga-index");
+        if (!res.ok) {
+          gaIndex = {};
+          return;
+        }
+        const data = await res.json();
+        gaIndex = data.group_addresses || {};
+      } catch (err) {
+        gaIndex = {};
+      }
     }
 
     Object.values(filterInputs).forEach(input => input.addEventListener("input", render));
@@ -411,7 +603,30 @@
       }
     });
 
-    connect();
+    gaReadBtn.addEventListener("click", async () => {
+      if (!currentGaDestinations.length) return;
+      gaReadBtn.disabled = true;
+      gaStatus.textContent = "Requesting KNX read…";
+      try {
+        const res = await fetch("/api/read-group-addresses", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ destinations: currentGaDestinations }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.detail || `Request failed (${res.status})`);
+        }
+        const data = await res.json();
+        gaStatus.textContent = `Read requested for ${data.count} destination(s).`;
+      } catch (err) {
+        gaStatus.textContent = `Read request failed: ${err.message}`;
+      } finally {
+        gaReadBtn.disabled = currentGaDestinations.length === 0;
+      }
+    });
+
+    loadGaIndex().finally(connect);
   </script>
 </body>
 </html>

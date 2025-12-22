@@ -23,7 +23,9 @@ class MonitorMQTTClient:
         self.broker = broker
         self.port = port
         self.client_id = client_id
+        self.main_topic = main_topic
         self.sub_topic = f"{main_topic}/data"
+        self.cmd_topic = f"{main_topic}/cmd"
         self.loop = loop
         self.message_queue = message_queue
 
@@ -84,3 +86,14 @@ class MonitorMQTTClient:
             self.message_queue.put_nowait(message)
         except asyncio.QueueFull:
             logger.warning("Monitor queue full; dropping MQTT message")
+
+    def request_group_reads(self, group_addresses: list[str]):
+        """Publish a read request for the given KNX group addresses."""
+        if not group_addresses:
+            return
+        payload = json.dumps({"action": "read", "destinations": group_addresses})
+        result = self.client.publish(self.cmd_topic, payload)
+        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+            logger.error("Failed to publish read request to %s: %s", self.cmd_topic, result)
+        else:
+            logger.info("Published KNX read request for %s", group_addresses)

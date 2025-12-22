@@ -16,6 +16,7 @@ from xknx.telegram.apci import GroupValueWrite, GroupValueResponse, APCIService
 from xknx.devices import Device
 from xknx.core.connection_state import XknxConnectionState
 from xknx.io import ConnectionConfig, ConnectionType, SecureConfig
+from xknx.tools.group_communication import group_value_read
 from xknxproject.models.knxproject import KNXProject
 from xknxproject.xknxproj import XKNXProj
 
@@ -143,7 +144,13 @@ class KNXDaemon:
     def __setup_mqtt(self, mqtt_broker: str, mqtt_port: int, mqtt_client_id: str, mqtt_main_topic: str):
         self.mqtt = bool(mqtt_broker)
         if self.mqtt:
-            self.mqtt_client = MQTTClient(mqtt_broker, mqtt_port, mqtt_client_id, mqtt_main_topic)
+            self.mqtt_client = MQTTClient(
+                mqtt_broker,
+                mqtt_port,
+                mqtt_client_id,
+                mqtt_main_topic,
+                on_command=self.__handle_command,
+            )
 
     def __telegram_received_cb(self, telegram: Telegram):
         if self.knx_project:
@@ -164,7 +171,7 @@ class KNXDaemon:
                     except CouldNotParseTelegram as e:
                         logger.error(f"Could not parse payload {payload.value} for group address {ga.address} (DPT {ga.dpt_main}.{str(ga.dpt_sub).zfill(4)}) - {ga.name}, {ga.description}: {e}")
                 elif payload.CODE == APCIService.GROUP_READ:
-                    pass
+                    value = None
                 else:
                     logger.info(f"Unhandled payload: {payload} - Telegram: {telegram}")
             
@@ -187,8 +194,10 @@ class KNXDaemon:
                         direction=None, device_name=None, destination_name=None, knx_msg_type=None):
         """Publish a message to the MQTT broker or write to the console if not running with MQTT."""
         if self.mqtt:
-            # only publish write and response messages
-            if knx_msg_type in [APCIService.GROUP_WRITE, APCIService.GROUP_RESPONSE]:
+            if knx_msg_type in [APCIService.GROUP_WRITE, APCIService.GROUP_RESPONSE, APCIService.GROUP_READ]:
+                knx_message_type = (
+                    knx_msg_type.name if isinstance(knx_msg_type, enum.Enum) else str(knx_msg_type)
+                ) if knx_msg_type is not None else None
                 self.mqtt_client.publish(
                     deviceid=deviceid,
                     type=type,
@@ -198,6 +207,7 @@ class KNXDaemon:
                     direction=direction,
                     destination_name=destination_name,
                     device_name=device_name,
+                    knx_message_type=knx_message_type,
                 )
         else:
             # print to console
@@ -213,6 +223,7 @@ class KNXDaemon:
         logger.info("Callback received with state {0}".format(state.name))
 
     async def __run_async(self):
+        self.loop = asyncio.get_running_loop()
         try:
             await self.xknx_daemon.start()
         except CommunicationError as e:
@@ -230,6 +241,30 @@ class KNXDaemon:
             self.mqtt_client.disconnect()
         if self.xknx_daemon:
             await self.xknx_daemon.stop()
+
+    async def read_group_addresses(self, group_addresses: list[str]):
+        if not group_addresses:
+            return
+        for ga in group_addresses:
+            try:
+                group_value_read(self.xknx_daemon, ga)
+                logger.info(f"Sent GroupValueRead for {ga}")
+            except Exception as exc:
+                logger.error(f"Failed to read group address {ga}: {exc}")
+
+    def __handle_command(self, payload: dict):
+        action = payload.get("action") if isinstance(payload, dict) else None
+        if action != "read":
+            logger.warning(f"Unknown command action: {action}")
+            return
+        group_addresses = payload.get("destinations") or []
+        if not isinstance(group_addresses, list) or not group_addresses:
+            logger.warning("Read command missing destinations")
+            return
+        if not hasattr(self, "loop"):
+            logger.warning("Event loop not ready; ignoring read command")
+            return
+        asyncio.run_coroutine_threadsafe(self.read_group_addresses(group_addresses), self.loop)
 
 @click.command()
 @click.option('--config', help='Path to the configuration file.', type=click.Path(exists=True), required=True)

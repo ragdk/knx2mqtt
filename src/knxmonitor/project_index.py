@@ -40,6 +40,7 @@ class ProjectIndex:
         self.password = password
         self.devices: list[IndexedItem] = []
         self.group_addresses: list[IndexedItem] = []
+        self.group_address_meta: dict[str, dict[str, str | int | None]] = {}
 
     def load(self):
         if not self.project_path.exists():
@@ -50,10 +51,20 @@ class ProjectIndex:
             self._index_item(device_id, data.get("name", ""), data.get("description", ""))
             for device_id, data in project.get("devices", {}).items()
         ]
-        self.group_addresses = [
-            self._index_item(addr, data.get("name", ""), data.get("description", ""))
-            for addr, data in project.get("group_addresses", {}).items()
-        ]
+        self.group_addresses = []
+        self.group_address_meta = {}
+        for addr, data in project.get("group_addresses", {}).items():
+            name = data.get("name", "")
+            description = data.get("description", "")
+            self.group_addresses.append(self._index_item(addr, name, description))
+            dpt = data.get("dpt") or {}
+            self.group_address_meta[addr] = {
+                "name": name or None,
+                "description": description or None,
+                "dpt_main": dpt.get("main"),
+                "dpt_sub": dpt.get("sub"),
+                "unit": data.get("unit") or dpt.get("unit"),
+            }
         logger.info(
             "Indexed %s devices and %s group addresses for NL queries",
             len(self.devices),
@@ -100,3 +111,6 @@ class ProjectIndex:
             ", ".join(destinations) if destinations else "none",
         )
         return NLResult(devices=devices, destinations=destinations, explanation=explanation)
+
+    def group_address_index(self) -> dict[str, dict[str, str | int | None]]:
+        return dict(self.group_address_meta)
