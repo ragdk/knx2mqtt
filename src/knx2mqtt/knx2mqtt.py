@@ -9,10 +9,11 @@ from configparser import ConfigParser, NoOptionError
 
 from .mqtt import MQTTClient
 
-from xknx import XKNX, dpt
+from xknx import XKNX
+from xknx.dpt.dpt import DPTBase
 from xknx.exceptions import CouldNotParseTelegram, CommunicationError
 from xknx.telegram import Telegram, AddressFilter
-from xknx.telegram.apci import GroupValueWrite, GroupValueResponse, APCIService
+from xknx.telegram.apci import GroupValueWrite, GroupValueResponse, APCIService, APCI
 from xknx.devices import Device
 from xknx.core.connection_state import XknxConnectionState
 from xknx.io import ConnectionConfig, ConnectionType, SecureConfig
@@ -30,15 +31,15 @@ class GroupAddressInfo:
     description: str
     dpt_main: int | None
     dpt_sub: int | None
-    transcoder: type[dpt.DPTBase] | None
+    transcoder: type[DPTBase] | None
 
-    def __init__(self, address: str, name: str, description: str, dpt_main: int|None, dpt_sub: int|None):
+    def __init__(self, address: str, name: str, description: str, dpt_main: int, dpt_sub: int|None):
         self.address = address
         self.name = name
         self.description = description
         self.dpt_main = dpt_main
         self.dpt_sub = dpt_sub
-        self.transcoder = dpt.DPTBase.transcoder_by_dpt(dpt_main, dpt_sub)
+        self.transcoder = DPTBase.transcoder_by_dpt(dpt_main, dpt_sub)
 
 class KNXDaemon:
     """KNX daemon.
@@ -87,15 +88,15 @@ class KNXDaemon:
         self.knx_keys_path = knx_keys_path
         self.knx_keys_pw = knxkeys_pw
         self.knx_gateway = knx_gateway
-        self.address_filters: list[AddressFilter] = None
-        self.group_addresses: dict[str: GroupAddressInfo] = {}
+        self.knx_project: KNXProject|None = None
+        self.address_filters: list[AddressFilter] = []
+        self.group_addresses: dict[str, GroupAddressInfo] = {}
         if not self.secure_enabled:
             logger.info("KNX IP Secure disabled via config (Secure = false); using non-secure KNX tunneling.")
 
         # extract knx project with info about devices, group addresses etc.
-        self.knx_project = None
         if knx_project_path:
-            self.knx_project: KNXProject = XKNXProj(path=knx_project_path, password=self.knx_keys_pw).parse()
+            self.knx_project = XKNXProj(path=knx_project_path, password=self.knx_keys_pw).parse()
 
             # create address filters for rooms based on the assumption that the room name is part of the name of the device or group address
             if rooms_to_monitor:
@@ -113,7 +114,7 @@ class KNXDaemon:
                     address=addr,
                     name=ga['name'],
                     description=ga['description'],
-                    dpt_main=ga['dpt']['main'] if ga['dpt'] else None,
+                    dpt_main=ga['dpt']['main'] if ga['dpt'] else None, # type: ignore
                     dpt_sub=ga['dpt']['sub'] if ga['dpt'] else None,
                 )
         self.__setup_knx_daemon()
@@ -141,9 +142,9 @@ class KNXDaemon:
         )
         self.xknx_daemon.telegram_queue.register_telegram_received_cb(self.__telegram_received_cb, self.address_filters)            
 
-    def __setup_mqtt(self, mqtt_broker: str, mqtt_port: int, mqtt_client_id: str, mqtt_main_topic: str):
-        self.mqtt = bool(mqtt_broker)
-        if self.mqtt:
+    def __setup_mqtt(self, mqtt_broker: str|None, mqtt_port: int|None, mqtt_client_id: str|None, mqtt_main_topic: str|None):
+        self.mqtt_client: MQTTClient|None = None
+        if mqtt_broker and mqtt_port and mqtt_client_id and mqtt_main_topic:
             self.mqtt_client = MQTTClient(
                 mqtt_broker,
                 mqtt_port,
@@ -154,7 +155,7 @@ class KNXDaemon:
 
     def __telegram_received_cb(self, telegram: Telegram):
         if self.knx_project:
-            payload = telegram.payload
+            payload: APCI|None = telegram.payload
             destination = str(telegram.destination_address)
             ga = self.group_addresses.get(destination)
             if not ga:
@@ -162,14 +163,14 @@ class KNXDaemon:
                 return
             transcoder = ga.transcoder
 
-            if transcoder:
+            if payload and transcoder:
                 value = None
                 if payload.CODE in [APCIService.GROUP_WRITE, APCIService.GROUP_RESPONSE]:
                     try:
-                        value = transcoder.from_knx(payload.value)
-                        value = value.member.name if isinstance(value, enum.EnumType) else value
+                        value = transcoder.from_knx(payload.value) # type: ignore
+                        value = value.member.name if isinstance(value, enum.EnumType) else value # type: ignore
                     except CouldNotParseTelegram as e:
-                        logger.error(f"Could not parse payload {payload.value} for group address {ga.address} (DPT {ga.dpt_main}.{str(ga.dpt_sub).zfill(4)}) - {ga.name}, {ga.description}: {e}")
+                        logger.error(f"Could not parse payload {payload.value} for group address {ga.address} (DPT {ga.dpt_main}.{str(ga.dpt_sub).zfill(4)}) - {ga.name}, {ga.description}: {e}") # type: ignore
                 elif payload.CODE == APCIService.GROUP_READ:
                     value = None
                 else:
@@ -193,7 +194,7 @@ class KNXDaemon:
     def publish_message(self, deviceid, type, unit, value, destination, 
                         direction=None, device_name=None, destination_name=None, knx_msg_type=None):
         """Publish a message to the MQTT broker or write to the console if not running with MQTT."""
-        if self.mqtt:
+        if self.mqtt_client:
             if knx_msg_type in [APCIService.GROUP_WRITE, APCIService.GROUP_RESPONSE, APCIService.GROUP_READ]:
                 knx_message_type = (
                     knx_msg_type.name if isinstance(knx_msg_type, enum.Enum) else str(knx_msg_type)
@@ -232,12 +233,12 @@ class KNXDaemon:
         await self.xknx_daemon.stop()
 
     def run(self):
-        if self.mqtt:
+        if self.mqtt_client:
             self.mqtt_client.run()
         asyncio.run(self.__run_async())
     
     async def stop(self):
-        if self.mqtt:
+        if self.mqtt_client:
             self.mqtt_client.disconnect()
         if self.xknx_daemon:
             await self.xknx_daemon.stop()
