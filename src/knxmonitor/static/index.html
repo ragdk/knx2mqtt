@@ -148,7 +148,7 @@
     }
     .ga-summary-columns {
       display: grid;
-      grid-template-columns: 1fr 1.4fr 0.9fr 0.8fr 0.6fr;
+      grid-template-columns: 1fr 1.3fr 1.5fr 0.9fr 0.8fr 0.6fr;
       gap: 0.35rem;
       padding: 0.35rem 0.65rem;
       border-radius: 0.55rem;
@@ -168,7 +168,7 @@
     }
     .ga-item {
       display: grid;
-      grid-template-columns: 1fr 1.4fr 0.9fr 0.8fr 0.6fr;
+      grid-template-columns: 1fr 1.3fr 1.5fr 0.9fr 0.8fr 0.6fr;
       gap: 0.35rem;
       padding: 0.55rem 0.65rem;
       border-radius: 0.55rem;
@@ -176,6 +176,7 @@
       border: 1px solid var(--border);
     }
     .ga-destination { font-weight: 700; }
+    .ga-description { color: var(--muted); }
     .ga-type { color: var(--muted); }
     .ga-value { color: var(--accent); font-weight: 600; }
     .ga-unit { color: var(--muted); }
@@ -211,6 +212,10 @@
           <input id="filter-destination-name" type="text" placeholder="e.g. Valve actuator">
         </label>
         <label>
+          GA description
+          <input id="filter-ga-description" type="text" placeholder="e.g. Floor heating loop">
+        </label>
+        <label>
           Type
           <input id="filter-type" type="text" placeholder="e.g. temperature">
         </label>
@@ -224,7 +229,7 @@
         </label>
         <label>
           Value
-          <input id="filter-value" type="text" placeholder="e.g. 22, on">
+          <input id="filter-value" type="text" placeholder="e.g. >22, <=19.5, on">
         </label>
         <label>
           Direction
@@ -260,7 +265,7 @@
       <div class="ga-summary-header">
         <div>
           <h2>Group address snapshot</h2>
-          <div class="muted">Latest values for filtered destinations.</div>
+          <div class="muted">Latest values for filtered group addresses.</div>
         </div>
         <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
           <button id="ga-read" type="button">KNX read filtered</button>
@@ -270,6 +275,7 @@
       <div class="ga-summary-columns" id="ga-summary-columns">
         <div>Group address</div>
         <div>GA name</div>
+        <div>Description</div>
         <div>Type</div>
         <div>Value</div>
         <div>Unit</div>
@@ -305,6 +311,7 @@
       device_name: document.getElementById("filter-device-name"),
       destination: document.getElementById("filter-destination"),
       destination_name: document.getElementById("filter-destination-name"),
+      ga_description: document.getElementById("filter-ga-description"),
       type: document.getElementById("filter-type"),
       knx_message_type: document.getElementById("filter-knx-message-type"),
       unit: document.getElementById("filter-unit"),
@@ -353,6 +360,45 @@
       return terms.some(term => hay.includes(term.toLowerCase()));
     }
 
+    function parseNumericValue(value) {
+      if (value == null) return null;
+      const num = Number(String(value).trim());
+      return Number.isFinite(num) ? num : null;
+    }
+
+    function valueMatches(fieldValue, terms) {
+      if (!terms.length) return true;
+      const raw = String(fieldValue ?? "");
+      const valueNum = parseNumericValue(raw);
+
+      return terms.some(term => {
+        const trimmed = term.trim();
+        const opMatch = trimmed.match(/^(<=|>=|==|=|<|>)/);
+        const operator = opMatch ? opMatch[1] : null;
+        const termValue = operator ? trimmed.slice(operator.length).trim() : trimmed;
+        const termNum = parseNumericValue(termValue);
+
+        if (termNum != null) {
+          if (valueNum == null) return false;
+          switch (operator) {
+            case "<":
+              return valueNum < termNum;
+            case "<=":
+              return valueNum <= termNum;
+            case ">":
+              return valueNum > termNum;
+            case ">=":
+              return valueNum >= termNum;
+            case "=":
+            case "==":
+            default:
+              return valueNum === termNum;
+          }
+        }
+        return raw.toLowerCase().includes(trimmed.toLowerCase());
+      });
+    }
+
     function matchesFilters(msg) {
       const filters = {
         deviceid: parseTerms(filterInputs.deviceid.value),
@@ -373,13 +419,18 @@
         fieldMatches(msg.type ?? msg.message_type, filters.type) &&
         fieldMatches(msg.knx_message_type, filters.knx_message_type) &&
         fieldMatches(msg.unit, filters.unit) &&
-        fieldMatches(msg.value, filters.value) &&
+        valueMatches(msg.value, filters.value) &&
         fieldMatches(msg.direction, filters.direction)
       );
     }
 
-    function destinationsFilterActive() {
-      return parseTerms(filterInputs.destination.value).length > 0;
+    function gaFiltersActive() {
+      return (
+        parseTerms(filterInputs.destination.value).length > 0 ||
+        parseTerms(filterInputs.destination_name.value).length > 0 ||
+        parseTerms(filterInputs.ga_description.value).length > 0 ||
+        parseTerms(filterInputs.type.value).length > 0
+      );
     }
 
     function looksLikeAddress(term) {
@@ -396,20 +447,56 @@
     }
 
     function filteredGroupAddresses() {
-      const terms = parseTerms(filterInputs.destination.value);
-      if (!terms.length) return [];
-      const addresses = Object.keys(gaIndex);
-      if (!addresses.length) {
-        return terms.slice().sort((a, b) => a.localeCompare(b));
+      const filters = {
+        destination: parseTerms(filterInputs.destination.value),
+        destination_name: parseTerms(filterInputs.destination_name.value),
+        ga_description: parseTerms(filterInputs.ga_description.value),
+        type: parseTerms(filterInputs.type.value),
+      };
+      const addresses = new Set([
+        ...Object.keys(gaIndex),
+        ...Array.from(latestByDest.keys()),
+      ]);
+      if (!addresses.size) return [];
+
+      const filtered = Array.from(addresses).filter(addr => {
+        if (!filters.destination.length &&
+            !filters.destination_name.length &&
+            !filters.ga_description.length &&
+            !filters.type.length) {
+          return false;
+        }
+        const meta = gaIndex[addr];
+        const latest = latestByDest.get(addr);
+        const msg = latest?.msg;
+        const name = meta?.name || msg?.destination_name || "";
+        const description = meta?.description || "";
+        const type = msg?.type || msg?.message_type || formatDpt(meta);
+
+        return (
+          fieldMatches(addr, filters.destination) &&
+          fieldMatches(name, filters.destination_name) &&
+          fieldMatches(description, filters.ga_description) &&
+          fieldMatches(type, filters.type)
+        );
+      });
+
+      const onlyDestinationFilter =
+        filters.destination.length > 0 &&
+        !filters.destination_name.length &&
+        !filters.ga_description.length &&
+        !filters.type.length;
+
+      if (!onlyDestinationFilter) {
+        return filtered.sort((a, b) => a.localeCompare(b));
       }
-      const matched = addresses.filter(addr => fieldMatches(addr, terms));
-      const matchedSet = new Set(matched);
-      terms.forEach(term => {
+      const matchedSet = new Set(filtered);
+      filters.destination.forEach(term => {
         if (!matchedSet.has(term) && looksLikeAddress(term)) {
-          matched.push(term);
+          filtered.push(term);
         }
       });
-      return matched.sort((a, b) => a.localeCompare(b));
+      return filtered.sort((a, b) => a.localeCompare(b));
     }
 
     function trackLatest(msg) {
@@ -424,7 +511,7 @@
     }
 
     function updateGroupSummary(filteredMessages) {
-        const active = destinationsFilterActive();
+        const active = gaFiltersActive();
         if (!active) {
           gaPanel.classList.add("hidden");
           gaPanel.style.display = "none";
@@ -450,6 +537,7 @@
           const latest = latestByDest.get(dest);
           const msg = latest?.msg;
           const name = meta?.name || msg?.destination_name || "-";
+          const description = meta?.description || "-";
           const type = msg?.type || msg?.message_type || formatDpt(meta);
           const value = msg?.value ?? "-";
           const unit = msg?.unit || meta?.unit || "-";
@@ -457,6 +545,7 @@
           <div class="ga-item">
             <div class="ga-destination">${dest}</div>
             <div class="muted">${name}</div>
+            <div class="ga-description">${description}</div>
             <div class="ga-type">${type}</div>
             <div class="ga-value">${value}</div>
             <div class="ga-unit">${unit}</div>
